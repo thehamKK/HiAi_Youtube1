@@ -181,39 +181,61 @@ function displayResults(analysis) {
 }
 
 // 보고서 다운로드
-function downloadReport() {
-    if (!currentAnalysis || !currentAnalysis.summary) {
-        showError('다운로드할 보고서가 없습니다.');
-        return;
+async function downloadReport(analysisId) {
+    try {
+        // API에서 분석 데이터 가져오기
+        const response = await axios.get(`/api/analysis/${analysisId}`);
+        const analysis = response.data;
+        
+        if (!analysis || !analysis.summary) {
+            showError('다운로드할 보고서가 없습니다.');
+            return;
+        }
+        
+        const blob = new Blob([analysis.summary], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${analysis.title || analysis.video_id}_요약보고서.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        console.log('✅ 보고서 다운로드 완료:', analysis.video_id);
+    } catch (error) {
+        console.error('보고서 다운로드 실패:', error);
+        showError('보고서 다운로드 중 오류가 발생했습니다.');
     }
-    
-    const blob = new Blob([currentAnalysis.summary], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${currentAnalysis.title || currentAnalysis.videoId}_요약보고서.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
 }
 
 // 대본 다운로드
-function downloadTranscript() {
-    if (!currentAnalysis || !currentAnalysis.transcript) {
-        showError('다운로드할 대본이 없습니다.');
-        return;
+async function downloadTranscript(analysisId, videoId) {
+    try {
+        // API에서 분석 데이터 가져오기
+        const response = await axios.get(`/api/analysis/${analysisId}`);
+        const analysis = response.data;
+        
+        if (!analysis || !analysis.transcript) {
+            showError('다운로드할 대본이 없습니다.');
+            return;
+        }
+        
+        const blob = new Blob([analysis.transcript], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${analysis.title || videoId}_대본.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        console.log('✅ 대본 다운로드 완료:', videoId);
+    } catch (error) {
+        console.error('대본 다운로드 실패:', error);
+        showError('대본 다운로드 중 오류가 발생했습니다.');
     }
-    
-    const blob = new Blob([currentAnalysis.transcript], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${currentAnalysis.title || currentAnalysis.videoId}_대본.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
 }
 
 // ==================== 채널 일괄 분석 ====================

@@ -1140,7 +1140,7 @@ app.get('/api/analysis/:id', async (c) => {
       return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
     }
     
-    return c.json({ analysis })
+    return c.json(analysis)
   } catch (error: any) {
     return c.json({
       error: '분석 결과를 조회할 수 없습니다.',
