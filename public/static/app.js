@@ -694,13 +694,16 @@ async function analyzeChannel() {
             `채널: ${channelName}\n` +
             `분석 대상: ${totalVideos}개 영상\n` +
             (alreadyAnalyzed > 0 ? `이미 분석됨: ${alreadyAnalyzed}개\n` : '') +
-            `잠시 후 자동으로 분석이 시작됩니다...`
+            `배치 작업이 생성되었습니다. 자동 분석이 시작됩니다...`
         );
         
-        // 2초 대기 후 자동 처리 시작
+        // 영상 목록 초기화 (대기중 상태로 표시)
+        initializeVideoList(response.data.videos);
+        
+        // 1초 대기 후 자동 처리 시작
         setTimeout(() => {
             startBatchProcessing(batchId, totalVideos, channelName);
-        }, 2000);
+        }, 1000);
         
     } catch (error) {
         console.error('채널 분석 시작 오류:', error);
@@ -716,6 +719,110 @@ async function analyzeChannel() {
     } finally {
         analyzeChannelBtn.disabled = false;
         analyzeChannelBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+}
+
+// 영상 목록 초기화 (대기중 상태)
+function initializeVideoList(videos) {
+    const listDiv = document.getElementById('videoStatusList');
+    
+    listDiv.innerHTML = videos.map((video, index) => `
+        <div id="video-item-${video.videoId}" class="bg-white border-2 border-gray-200 rounded-lg p-4 transition-all hover:shadow-md">
+            <div class="flex items-start space-x-3">
+                <!-- 상태 아이콘 -->
+                <div id="video-icon-${video.videoId}" class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-gray-100">
+                    <i class="fas fa-clock text-gray-400"></i>
+                </div>
+                
+                <!-- 영상 정보 -->
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-start justify-between mb-1">
+                        <p class="font-semibold text-gray-800 text-sm truncate pr-2">
+                            ${index + 1}. ${video.title}
+                        </p>
+                        <span id="video-badge-${video.videoId}" class="flex-shrink-0 px-2 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+                            대기중
+                        </span>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-2">
+                        <i class="fas fa-link mr-1"></i>
+                        <a href="${video.url}" target="_blank" class="text-blue-600 hover:underline">
+                            ${video.videoId}
+                        </a>
+                    </p>
+                    <!-- 진행률 바 (숨김 상태) -->
+                    <div id="video-progress-${video.videoId}" class="hidden mt-2">
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="video-progress-bar-${video.videoId}" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <p id="video-status-text-${video.videoId}" class="text-xs text-gray-600 mt-1"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// 영상 상태 업데이트
+function updateVideoStatus(videoId, status, statusText = '', progress = 0) {
+    const iconDiv = document.getElementById(`video-icon-${videoId}`);
+    const badgeSpan = document.getElementById(`video-badge-${videoId}`);
+    const progressDiv = document.getElementById(`video-progress-${videoId}`);
+    const progressBar = document.getElementById(`video-progress-bar-${videoId}`);
+    const statusTextP = document.getElementById(`video-status-text-${videoId}`);
+    const itemDiv = document.getElementById(`video-item-${videoId}`);
+    
+    if (!iconDiv || !badgeSpan) return;
+    
+    // 상태별 UI 업데이트
+    switch(status) {
+        case 'pending':
+            iconDiv.innerHTML = '<i class="fas fa-clock text-gray-400"></i>';
+            iconDiv.className = 'flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-gray-100';
+            badgeSpan.textContent = '대기중';
+            badgeSpan.className = 'flex-shrink-0 px-2 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600';
+            itemDiv.className = 'bg-white border-2 border-gray-200 rounded-lg p-4 transition-all hover:shadow-md';
+            progressDiv.classList.add('hidden');
+            break;
+            
+        case 'processing':
+            iconDiv.innerHTML = '<i class="fas fa-spinner fa-spin text-blue-500"></i>';
+            iconDiv.className = 'flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-blue-100';
+            badgeSpan.textContent = '분석중';
+            badgeSpan.className = 'flex-shrink-0 px-2 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700';
+            itemDiv.className = 'bg-blue-50 border-2 border-blue-300 rounded-lg p-4 transition-all shadow-md';
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = `${progress}%`;
+            if (statusTextP && statusText) {
+                statusTextP.textContent = statusText;
+            }
+            break;
+            
+        case 'completed':
+            iconDiv.innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
+            iconDiv.className = 'flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-green-100';
+            badgeSpan.textContent = '완료';
+            badgeSpan.className = 'flex-shrink-0 px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700';
+            itemDiv.className = 'bg-green-50 border-2 border-green-300 rounded-lg p-4 transition-all hover:shadow-md';
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = '100%';
+            progressBar.className = 'bg-green-500 h-2 rounded-full transition-all duration-300';
+            if (statusTextP) {
+                statusTextP.textContent = '✓ 분석 완료';
+            }
+            break;
+            
+        case 'failed':
+            iconDiv.innerHTML = '<i class="fas fa-times-circle text-red-500"></i>';
+            iconDiv.className = 'flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-red-100';
+            badgeSpan.textContent = '오류';
+            badgeSpan.className = 'flex-shrink-0 px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700';
+            itemDiv.className = 'bg-red-50 border-2 border-red-300 rounded-lg p-4 transition-all hover:shadow-md';
+            progressDiv.classList.remove('hidden');
+            if (statusTextP && statusText) {
+                statusTextP.textContent = `✗ ${statusText}`;
+            }
+            break;
     }
 }
 
@@ -746,24 +853,46 @@ async function startBatchProcessing(batchId, totalVideos, channelName) {
             completed = progress.completed;
             failed = progress.failed;
             
-            // 진행률 업데이트
+            // 전체 진행률 업데이트
             const progressPercent = Math.round(((completed + failed) / totalVideos) * 100);
             document.getElementById('channelProgressBar').style.width = `${progressPercent}%`;
+            document.getElementById('channelProgressPercentage').textContent = `${progressPercent}%`;
             document.getElementById('channelProgressText').textContent = 
-                `${completed + failed} / ${totalVideos} 완료 (성공: ${completed}, 실패: ${failed})`;
+                `${completed + failed} / ${totalVideos} (성공: ${completed}, 실패: ${failed})`;
             
-            // 현재 처리 중인 영상 표시
-            const processingVideo = videos.find(v => v.status === 'processing');
-            if (processingVideo) {
-                document.getElementById('channelCurrentVideo').textContent = 
-                    `현재 분석 중: ${processingVideo.video_title}`;
-            } else if (completed + failed < totalVideos) {
-                const pendingVideo = videos.find(v => v.status === 'pending');
-                if (pendingVideo) {
-                    document.getElementById('channelCurrentVideo').textContent = 
-                        `대기 중: ${pendingVideo.video_title}`;
+            // 각 영상별 상태 업데이트
+            videos.forEach(video => {
+                if (video.status === 'pending') {
+                    updateVideoStatus(video.video_id, 'pending');
+                } else if (video.status === 'processing') {
+                    // 처리 중인 영상: 단계별 진행률 표시
+                    const elapsed = video.started_at ? 
+                        Math.floor((Date.now() - new Date(video.started_at).getTime()) / 1000) : 0;
+                    
+                    let stepProgress = 0;
+                    let stepText = '';
+                    
+                    if (elapsed < 90) {
+                        // 1단계: 대본 추출 (0-90초)
+                        stepProgress = Math.min(Math.floor((elapsed / 90) * 40), 40);
+                        stepText = `1단계: 대본 추출 중... (${elapsed}초 경과)`;
+                    } else if (elapsed < 155) {
+                        // 대기 시간 (90-155초)
+                        stepProgress = 40 + Math.min(Math.floor(((elapsed - 90) / 65) * 20), 20);
+                        stepText = `Rate Limit 방지 대기 중... (${155 - elapsed}초 남음)`;
+                    } else {
+                        // 2단계: 보고서 생성 (155초~)
+                        stepProgress = 60 + Math.min(Math.floor(((elapsed - 155) / 30) * 40), 40);
+                        stepText = `2단계: AI 요약 보고서 생성 중...`;
+                    }
+                    
+                    updateVideoStatus(video.video_id, 'processing', stepText, stepProgress);
+                } else if (video.status === 'completed') {
+                    updateVideoStatus(video.video_id, 'completed');
+                } else if (video.status === 'failed') {
+                    updateVideoStatus(video.video_id, 'failed', video.error_message || '알 수 없는 오류');
                 }
-            }
+            });
             
             // 완료 확인
             if (batch.status === 'completed') {

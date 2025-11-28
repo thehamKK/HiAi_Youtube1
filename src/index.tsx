@@ -977,16 +977,35 @@ app.get('/', (c) => {
 
                 <!-- 채널 분석 진행상황 -->
                 <div id="channelProgress" class="hidden mt-6">
-                    <div class="bg-gray-50 rounded-lg p-6">
-                        <h4 class="font-semibold text-gray-800 mb-3">진행 상황</h4>
-                        <div class="space-y-2">
-                            <div class="flex justify-between text-sm">
-                                <span id="channelProgressText" class="font-semibold text-orange-600"></span>
+                    <div class="bg-gradient-to-br from-gray-50 to-blue-50 rounded-xl p-6 border-2 border-gray-200">
+                        <div class="flex justify-between items-center mb-4">
+                            <h4 class="font-bold text-gray-800 text-lg flex items-center">
+                                <i class="fas fa-tasks mr-2 text-blue-600"></i>
+                                배치 작업 진행 현황
+                            </h4>
+                            <span id="channelProgressText" class="font-semibold text-orange-600 text-sm"></span>
+                        </div>
+                        
+                        <!-- 전체 진행률 바 -->
+                        <div class="mb-4">
+                            <div class="flex justify-between text-xs text-gray-600 mb-1">
+                                <span>전체 진행률</span>
+                                <span id="channelProgressPercentage">0%</span>
                             </div>
-                            <div class="w-full bg-gray-200 rounded-full h-4">
-                                <div id="channelProgressBar" class="bg-gradient-to-r from-orange-500 to-red-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            <div class="w-full bg-gray-200 rounded-full h-3">
+                                <div id="channelProgressBar" class="bg-gradient-to-r from-orange-500 to-red-500 h-3 rounded-full transition-all duration-500" style="width: 0%"></div>
                             </div>
-                            <div id="channelCurrentVideo" class="text-xs text-gray-500 mt-2"></div>
+                        </div>
+                        
+                        <!-- 영상별 상태 목록 -->
+                        <div class="mt-6">
+                            <h5 class="font-semibold text-gray-700 text-sm mb-3 flex items-center">
+                                <i class="fas fa-list-ul mr-2 text-gray-600"></i>
+                                영상별 분석 상태
+                            </h5>
+                            <div id="videoStatusList" class="space-y-2 max-h-96 overflow-y-auto">
+                                <!-- 영상 목록이 여기에 동적으로 추가됩니다 -->
+                            </div>
                         </div>
                     </div>
                 </div>
