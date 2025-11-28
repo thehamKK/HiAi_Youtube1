@@ -60,14 +60,36 @@ async function createJWT(serviceAccountEmail: string, privateKey: string): Promi
   const unsignedToken = `${base64Header}.${base64Payload}`
   
   // Private Key를 PEM에서 추출
-  const pemKey = privateKey
-    .replace(/-----BEGIN PRIVATE KEY-----/, '')
-    .replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\\n/g, '\n')
-    .replace(/\s/g, '')
+  // Step 1: 따옴표 제거
+  let cleanKey = privateKey.replace(/^["']|["']$/g, '').trim()
   
-  // Base64 디코딩
-  const binaryKey = Uint8Array.from(atob(pemKey), c => c.charCodeAt(0))
+  // Step 2: BEGIN/END 구문 제거
+  cleanKey = cleanKey
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .trim()
+  
+  // Step 3: 모든 형태의 개행/공백 제거
+  cleanKey = cleanKey.replace(/\\n/g, '\n').replace(/\\r/g, '\r')
+  cleanKey = cleanKey.replace(/\n/g, '').replace(/\r/g, '').replace(/\s/g, '').replace(/\t/g, '')
+  
+  // Step 4: 기존 패딩 제거 후 다시 추가 (올바른 패딩 계산)
+  cleanKey = cleanKey.replace(/=+$/, '')
+  const remainder = cleanKey.length % 4
+  if (remainder > 0) {
+    cleanKey += '='.repeat(4 - remainder)
+  }
+  
+  const pemKey = cleanKey
+  
+  // Base64 디코딩 (네이티브 atob 사용)
+  let binaryKey: Uint8Array
+  try {
+    const binaryString = atob(pemKey)
+    binaryKey = Uint8Array.from(binaryString, c => c.charCodeAt(0))
+  } catch (e) {
+    throw new Error('Private Key Base64 디코딩 실패')
+  }
   
   // PKCS#8 형식에서 실제 키 추출
   const key = await crypto.subtle.importKey(
@@ -89,7 +111,7 @@ async function createJWT(serviceAccountEmail: string, privateKey: string): Promi
     encoder.encode(unsignedToken)
   )
   
-  // Base64 URL 인코딩
+  // Base64 URL 인코딩 (네이티브 btoa 사용)
   const base64Signature = btoa(String.fromCharCode(...new Uint8Array(signature)))
     .replace(/=/g, '')
     .replace(/\+/g, '-')
@@ -111,13 +133,16 @@ async function getAccessToken(serviceAccountEmail: string, privateKey: string): 
       body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
     })
     
+    if (!response.ok) {
+      return null
+    }
+    
     const data = await response.json()
     
     if (data.access_token) {
       return data.access_token
     }
     
-    console.error('Access Token 발급 실패:', data)
     return null
   } catch (error) {
     console.error('Access Token 발급 오류:', error)
@@ -1589,7 +1614,18 @@ app.post('/api/send-email/batch/:batchId', async (c) => {
 app.post('/api/send-drive/single/:id', async (c) => {
   const { env } = c
   const id = parseInt(c.req.param('id'))
-  const { driveFolder } = await c.req.json()
+  
+  // Body가 있으면 파싱, 없으면 빈 객체
+  let body: any = {}
+  try {
+    const text = await c.req.text()
+    if (text) {
+      body = JSON.parse(text)
+    }
+  } catch (e) {
+    // Body가 없거나 빈 경우 무시
+  }
+  const driveFolder = body.driveFolder
   
   if (!env.DB) {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
@@ -1613,10 +1649,7 @@ app.post('/api/send-drive/single/:id', async (c) => {
       return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
     }
     
-    console.log(`📁 구글드라이브 업로드 시작`)
-    console.log(`  - 분석 ID: ${id}`)
-    console.log(`  - 영상 ID: ${result.video_id}`)
-    console.log(`  - 제목: ${result.title}`)
+    // Google Drive 업로드 시작
     
     // Access Token 발급
     const accessToken = await getAccessToken(
@@ -1695,7 +1728,18 @@ app.post('/api/send-drive/single/:id', async (c) => {
 app.post('/api/send-drive/batch/:batchId', async (c) => {
   const { env } = c
   const batchId = parseInt(c.req.param('batchId'))
-  const { driveFolder } = await c.req.json()
+  
+  // Body가 있으면 파싱, 없으면 빈 객체
+  let body: any = {}
+  try {
+    const text = await c.req.text()
+    if (text) {
+      body = JSON.parse(text)
+    }
+  } catch (e) {
+    // Body가 없거나 빈 경우 무시
+  }
+  const driveFolder = body.driveFolder
   
   if (!env.DB) {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
@@ -1736,10 +1780,7 @@ app.post('/api/send-drive/batch/:batchId', async (c) => {
       }, 400)
     }
     
-    console.log(`📁 배치 구글드라이브 업로드 시작`)
-    console.log(`  - 배치 ID: ${batchId}`)
-    console.log(`  - 채널: ${batch.channel_name}`)
-    console.log(`  - 완료된 영상: ${completedVideos.length}개`)
+    // 배치 Google Drive 업로드 시작
     
     // Access Token 발급
     const accessToken = await getAccessToken(
