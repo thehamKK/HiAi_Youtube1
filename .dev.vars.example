@@ -1,0 +1,11 @@
+# YouTube API Key
+YOUTUBE_API_KEY=your_youtube_api_key_here
+
+# Gemini API Key
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Google Drive Service Account (선택사항)
+# GOOGLE_DRIVE_SETUP.md 파일 참고
+GOOGLE_SERVICE_ACCOUNT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n"
+GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id_here

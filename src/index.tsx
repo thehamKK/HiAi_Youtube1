@@ -6,6 +6,9 @@ type Bindings = {
   DB: D1Database
   YOUTUBE_API_KEY: string
   GEMINI_API_KEY: string
+  GOOGLE_SERVICE_ACCOUNT_EMAIL?: string
+  GOOGLE_PRIVATE_KEY?: string
+  GOOGLE_DRIVE_FOLDER_ID?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -32,6 +35,148 @@ function extractVideoId(url: string): string | null {
   }
   
   return null
+}
+
+// ==================== Google Drive 업로드 ====================
+
+// JWT 생성 (Google Service Account 인증용)
+async function createJWT(serviceAccountEmail: string, privateKey: string): Promise<string> {
+  const header = {
+    alg: 'RS256',
+    typ: 'JWT'
+  }
+  
+  const now = Math.floor(Date.now() / 1000)
+  const payload = {
+    iss: serviceAccountEmail,
+    scope: 'https://www.googleapis.com/auth/drive.file',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now
+  }
+  
+  const base64Header = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const base64Payload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const unsignedToken = `${base64Header}.${base64Payload}`
+  
+  // Private Key를 PEM에서 추출
+  const pemKey = privateKey
+    .replace(/-----BEGIN PRIVATE KEY-----/, '')
+    .replace(/-----END PRIVATE KEY-----/, '')
+    .replace(/\\n/g, '\n')
+    .replace(/\s/g, '')
+  
+  // Base64 디코딩
+  const binaryKey = Uint8Array.from(atob(pemKey), c => c.charCodeAt(0))
+  
+  // PKCS#8 형식에서 실제 키 추출
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    binaryKey,
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      hash: 'SHA-256'
+    },
+    false,
+    ['sign']
+  )
+  
+  // 서명 생성
+  const encoder = new TextEncoder()
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    encoder.encode(unsignedToken)
+  )
+  
+  // Base64 URL 인코딩
+  const base64Signature = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+  
+  return `${unsignedToken}.${base64Signature}`
+}
+
+// Access Token 발급
+async function getAccessToken(serviceAccountEmail: string, privateKey: string): Promise<string | null> {
+  try {
+    const jwt = await createJWT(serviceAccountEmail, privateKey)
+    
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+    })
+    
+    const data = await response.json()
+    
+    if (data.access_token) {
+      return data.access_token
+    }
+    
+    console.error('Access Token 발급 실패:', data)
+    return null
+  } catch (error) {
+    console.error('Access Token 발급 오류:', error)
+    return null
+  }
+}
+
+// Google Drive에 파일 업로드
+async function uploadToGoogleDrive(
+  accessToken: string,
+  fileName: string,
+  content: string,
+  mimeType: string,
+  folderId?: string
+): Promise<{ id: string, webViewLink: string } | null> {
+  try {
+    const metadata = {
+      name: fileName,
+      mimeType: mimeType,
+      ...(folderId && { parents: [folderId] })
+    }
+    
+    const boundary = '-------314159265358979323846'
+    const delimiter = `\r\n--${boundary}\r\n`
+    const closeDelimiter = `\r\n--${boundary}--`
+    
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      `Content-Type: ${mimeType}\r\n\r\n` +
+      content +
+      closeDelimiter
+    
+    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`
+      },
+      body: multipartRequestBody
+    })
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('Drive 업로드 실패:', response.status, errorText)
+      return null
+    }
+    
+    const data = await response.json()
+    return {
+      id: data.id,
+      webViewLink: data.webViewLink
+    }
+  } catch (error) {
+    console.error('Drive 업로드 오류:', error)
+    return null
+  }
 }
 
 // YouTube URL에서 channel_id 추출
@@ -1450,6 +1595,14 @@ app.post('/api/send-drive/single/:id', async (c) => {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
   }
   
+  // Google Drive 환경 변수 확인
+  if (!env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !env.GOOGLE_PRIVATE_KEY) {
+    return c.json({ 
+      error: 'Google Drive 설정이 필요합니다.',
+      details: 'GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY를 설정해주세요. GOOGLE_DRIVE_SETUP.md 참고'
+    }, 500)
+  }
+  
   try {
     // 분석 결과 조회
     const result = await env.DB.prepare(`
@@ -1460,17 +1613,74 @@ app.post('/api/send-drive/single/:id', async (c) => {
       return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
     }
     
-    // TODO: 실제 구글드라이브 업로드 로직
-    console.log(`📁 구글드라이브 전송 시뮬레이션`)
+    console.log(`📁 구글드라이브 업로드 시작`)
     console.log(`  - 분석 ID: ${id}`)
-    console.log(`  - 폴더: ${driveFolder || '루트'}`)
     console.log(`  - 영상 ID: ${result.video_id}`)
+    console.log(`  - 제목: ${result.title}`)
+    
+    // Access Token 발급
+    const accessToken = await getAccessToken(
+      env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      env.GOOGLE_PRIVATE_KEY
+    )
+    
+    if (!accessToken) {
+      return c.json({ 
+        error: 'Google Drive 인증 실패',
+        details: 'Access Token을 발급받을 수 없습니다. Service Account 설정을 확인해주세요.'
+      }, 500)
+    }
+    
+    console.log(`✅ Access Token 발급 완료`)
+    
+    // 파일 내용 생성
+    const title = (result.title as string) || result.video_id as string
+    const videoId = result.video_id as string
+    const transcript = (result.transcript as string) || ''
+    const summary = (result.summary as string) || ''
+    
+    let fileContent = `# ${title}\n\n`
+    fileContent += `**영상 ID:** ${videoId}\n`
+    fileContent += `**URL:** https://www.youtube.com/watch?v=${videoId}\n`
+    fileContent += `**분석일:** ${result.created_at}\n\n`
+    
+    if (transcript) {
+      fileContent += `## 📝 대본\n\n${transcript}\n\n`
+    }
+    
+    if (summary) {
+      fileContent += `## 📊 AI 요약\n\n${summary}\n\n`
+    }
+    
+    // 파일명 생성 (특수문자 제거)
+    const safeTitle = title.replace(/[^a-zA-Z0-9�가-힣\s-]/g, '').substring(0, 100)
+    const fileName = `${safeTitle}_${videoId}.md`
+    
+    // Google Drive에 업로드
+    const uploadResult = await uploadToGoogleDrive(
+      accessToken,
+      fileName,
+      fileContent,
+      'text/markdown',
+      env.GOOGLE_DRIVE_FOLDER_ID
+    )
+    
+    if (!uploadResult) {
+      return c.json({ 
+        error: 'Google Drive 업로드 실패',
+        details: '파일 업로드 중 오류가 발생했습니다.'
+      }, 500)
+    }
+    
+    console.log(`✅ 업로드 완료: ${uploadResult.webViewLink}`)
     
     return c.json({
       success: true,
-      message: `구글드라이브에 업로드 완료 (시뮬레이션)`,
+      message: `구글드라이브에 업로드 완료`,
       analysisId: id,
-      driveFolder: driveFolder || '루트'
+      fileName: fileName,
+      driveLink: uploadResult.webViewLink,
+      fileId: uploadResult.id
     })
   } catch (error: any) {
     console.error('❌ 구글드라이브 전송 실패:', error)
@@ -1491,8 +1701,16 @@ app.post('/api/send-drive/batch/:batchId', async (c) => {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
   }
   
+  // Google Drive 환경 변수 확인
+  if (!env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !env.GOOGLE_PRIVATE_KEY) {
+    return c.json({ 
+      error: 'Google Drive 설정이 필요합니다.',
+      details: 'GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY를 설정해주세요. GOOGLE_DRIVE_SETUP.md 참고'
+    }, 500)
+  }
+  
   try {
-    // 배치 정보 및 완료된 영상들 조회
+    // 배치 정보 조회
     const batch = await env.DB.prepare(`
       SELECT * FROM batch_jobs WHERE id = ?
     `).bind(batchId).first()
@@ -1501,25 +1719,115 @@ app.post('/api/send-drive/batch/:batchId', async (c) => {
       return c.json({ error: '배치를 찾을 수 없습니다.' }, 404)
     }
     
+    // 완료된 영상들 조회 (analysis_id가 있는 것만)
     const videosResult = await env.DB.prepare(`
-      SELECT COUNT(*) as count FROM batch_videos 
-      WHERE batch_id = ? AND status = 'completed'
-    `).bind(batchId).first()
+      SELECT bv.*, a.transcript, a.summary, a.title, a.created_at
+      FROM batch_videos bv
+      LEFT JOIN analyses a ON bv.analysis_id = a.id
+      WHERE bv.batch_id = ? AND bv.status = 'completed' AND bv.analysis_id IS NOT NULL
+    `).bind(batchId).all()
     
-    const completedCount = (videosResult as any)?.count || 0
+    const completedVideos = videosResult.results || []
     
-    // TODO: 실제 구글드라이브 업로드 로직
-    console.log(`📁 배치 구글드라이브 전송 시뮬레이션`)
+    if (completedVideos.length === 0) {
+      return c.json({ 
+        error: '업로드할 완료된 분석이 없습니다.',
+        details: '배치 분석이 완료될 때까지 기다려주세요.'
+      }, 400)
+    }
+    
+    console.log(`📁 배치 구글드라이브 업로드 시작`)
     console.log(`  - 배치 ID: ${batchId}`)
-    console.log(`  - 폴더: ${driveFolder || '루트'}`)
-    console.log(`  - 완료된 영상: ${completedCount}개`)
+    console.log(`  - 채널: ${batch.channel_name}`)
+    console.log(`  - 완료된 영상: ${completedVideos.length}개`)
+    
+    // Access Token 발급
+    const accessToken = await getAccessToken(
+      env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      env.GOOGLE_PRIVATE_KEY
+    )
+    
+    if (!accessToken) {
+      return c.json({ 
+        error: 'Google Drive 인증 실패',
+        details: 'Access Token을 발급받을 수 없습니다.'
+      }, 500)
+    }
+    
+    console.log(`✅ Access Token 발급 완료`)
+    
+    // 각 영상을 업로드
+    const uploadResults = []
+    const uploadErrors = []
+    
+    for (const video of completedVideos) {
+      try {
+        const title = (video.title as string) || video.video_id as string
+        const videoId = video.video_id as string
+        const transcript = (video.transcript as string) || ''
+        const summary = (video.summary as string) || ''
+        
+        let fileContent = `# ${title}\n\n`
+        fileContent += `**영상 ID:** ${videoId}\n`
+        fileContent += `**URL:** https://www.youtube.com/watch?v=${videoId}\n`
+        fileContent += `**분석일:** ${video.created_at}\n\n`
+        
+        if (transcript) {
+          fileContent += `## 📝 대본\n\n${transcript}\n\n`
+        }
+        
+        if (summary) {
+          fileContent += `## 📊 AI 요약\n\n${summary}\n\n`
+        }
+        
+        // 파일명 생성
+        const safeTitle = title.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').substring(0, 100)
+        const fileName = `${safeTitle}_${videoId}.md`
+        
+        // Google Drive에 업로드
+        const uploadResult = await uploadToGoogleDrive(
+          accessToken,
+          fileName,
+          fileContent,
+          'text/markdown',
+          env.GOOGLE_DRIVE_FOLDER_ID
+        )
+        
+        if (uploadResult) {
+          uploadResults.push({
+            videoId,
+            fileName,
+            driveLink: uploadResult.webViewLink
+          })
+          console.log(`✅ 업로드 완료: ${fileName}`)
+        } else {
+          uploadErrors.push({
+            videoId,
+            fileName,
+            error: '업로드 실패'
+          })
+        }
+        
+        // Rate Limit 방지 (1초 대기)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      } catch (error: any) {
+        console.error(`❌ 영상 ${video.video_id} 업로드 실패:`, error)
+        uploadErrors.push({
+          videoId: video.video_id as string,
+          error: error.message
+        })
+      }
+    }
     
     return c.json({
       success: true,
-      message: `구글드라이브에 ${completedCount}개 파일 업로드 완료 (시뮬레이션)`,
+      message: `구글드라이브에 ${uploadResults.length}개 파일 업로드 완료`,
       batchId: batchId,
-      completedCount: completedCount,
-      driveFolder: driveFolder || '루트'
+      channelName: batch.channel_name,
+      uploadedCount: uploadResults.length,
+      failedCount: uploadErrors.length,
+      uploadResults: uploadResults,
+      uploadErrors: uploadErrors
     })
   } catch (error: any) {
     console.error('❌ 배치 구글드라이브 전송 실패:', error)
