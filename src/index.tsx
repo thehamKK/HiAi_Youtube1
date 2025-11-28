@@ -92,7 +92,7 @@ async function getChannelVideos(channelId: string, apiKey: string, maxResults: n
 // Gemini API를 통한 대본 추출
 async function extractTranscriptWithGemini(videoUrl: string, apiKey: string): Promise<{ transcript: string, title?: string, uploadDate?: string } | null> {
   try {
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
     
     const requestBody = {
       contents: [{
@@ -143,7 +143,7 @@ async function extractTranscriptFromYouTube(videoId: string): Promise<string | n
 // Gemini API를 통한 요약 보고서 생성
 async function generateSummaryWithGemini(transcript: string, apiKey: string, videoTitle?: string): Promise<string | null> {
   try {
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
     
     const prompt = `다음은 YouTube 영상의 대본입니다${videoTitle ? ` (제목: ${videoTitle})` : ''}. 이 대본을 읽고 1페이지 분량의 요약 보고서를 작성해주세요.
 
