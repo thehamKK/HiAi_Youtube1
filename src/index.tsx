@@ -227,10 +227,10 @@ async function processVideoAnalysis(
       videoId,
       videoUrl,
       transcriptResult.transcript,
-      videoTitle,
-      uploadDate,
-      channelId,
-      channelName
+      videoTitle || null,
+      uploadDate || null,
+      channelId || null,
+      channelName || null
     ).run()
     
     const analysisId = insertResult.meta.last_row_id
@@ -380,7 +380,7 @@ app.post('/api/analyze/transcript', async (c) => {
     const result = await env.DB.prepare(`
       INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', CURRENT_TIMESTAMP)
-    `).bind(videoId, videoUrl, transcript, title, uploadDate, channelId, channelName).run()
+    `).bind(videoId, videoUrl, transcript, title || null, uploadDate || null, channelId || null, channelName || null).run()
     
     const analysisId = result.meta.last_row_id
     
