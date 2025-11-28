@@ -731,10 +731,9 @@ function displayHistory(analyses) {
 async function viewAnalysis(id) {
     try {
         const response = await axios.get(`/api/analysis/${id}`);
+        const analysis = response.data;
         
-        if (response.data.analysis) {
-            const analysis = response.data.analysis;
-            
+        if (analysis) {
             currentAnalysis = {
                 id: analysis.id,
                 videoId: analysis.video_id,
