@@ -234,31 +234,54 @@ async function extractTranscriptWithGemini(videoUrl: string, apiKey: string): Pr
     }
     
     console.log('📤 Gemini API 요청 전송 중...')
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    })
     
-    console.log(`📥 Gemini API 응답 수신: ${response.status}`)
-    const data = await response.json()
+    // 10분 타임아웃 설정
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => {
+      console.log('⏰ Gemini API 타임아웃 (10분 초과)')
+      controller.abort()
+    }, 10 * 60 * 1000) // 10분
     
-    const elapsed = Math.round((Date.now() - startTime) / 1000)
-    console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
-    
-    if (data.error) {
-      console.error('❌ Gemini API 에러:', data.error.message)
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      })
+      
+      clearTimeout(timeoutId)
+      console.log(`📥 Gemini API 응답 수신: ${response.status}`)
+      
+      const data = await response.json()
+      
+      const elapsed = Math.round((Date.now() - startTime) / 1000)
+      console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+      
+      if (data.error) {
+        console.error('❌ Gemini API 에러:', data.error.message)
+        return null
+      }
+      
+      if (data.candidates && data.candidates[0]?.content?.parts) {
+        const transcript = data.candidates[0].content.parts[0].text
+        console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초)`)
+        return { transcript }
+      }
+      
+      console.log('⚠️ Gemini API 응답에 대본 없음')
       return null
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId)
+      
+      if (fetchError.name === 'AbortError') {
+        console.error('❌ Gemini API 타임아웃 (10분 초과)')
+        throw new Error('Gemini API 타임아웃: 10분 이내에 응답받지 못했습니다.')
+      }
+      
+      console.error('❌ Gemini API fetch 오류:', fetchError.message)
+      throw fetchError
     }
-    
-    if (data.candidates && data.candidates[0]?.content?.parts) {
-      const transcript = data.candidates[0].content.parts[0].text
-      console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초)`)
-      return { transcript }
-    }
-    
-    console.log('⚠️ Gemini API 응답에 대본 없음')
-    return null
   } catch (error) {
     console.error('❌ Gemini 대본 추출 실패:', error)
     return null
@@ -697,6 +720,7 @@ app.post('/api/channel/analyze', async (c) => {
     }
     
     console.log(`✅ 배치 작업 생성 완료: ${newVideos.length}개 영상`)
+    console.log(`📋 첫 번째 영상 데이터:`, JSON.stringify(newVideos[0]))
     
     // 백그라운드에서 자동 처리 시작 (비동기, 응답을 기다리지 않음)
     c.executionCtx.waitUntil(

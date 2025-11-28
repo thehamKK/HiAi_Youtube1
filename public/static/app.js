@@ -728,6 +728,9 @@ async function analyzeChannel() {
         );
         
         // 영상 목록 초기화 (대기중 상태로 표시)
+        console.log('📋 받은 영상 목록:', response.data.videos);
+        console.log('📋 영상 개수:', response.data.videos.length);
+        console.log('📋 첫 번째 영상:', response.data.videos[0]);
         initializeVideoList(response.data.videos);
         
         // 1초 대기 후 자동 처리 시작
@@ -754,7 +757,13 @@ async function analyzeChannel() {
 
 // 영상 목록 초기화 (대기중 상태)
 function initializeVideoList(videos) {
+    console.log('🎬 initializeVideoList 호출됨:', videos.length, '개 영상');
     const listDiv = document.getElementById('videoStatusList');
+    
+    if (!listDiv) {
+        console.error('❌ videoStatusList 요소를 찾을 수 없습니다!');
+        return;
+    }
     
     listDiv.innerHTML = videos.map((video, index) => `
         <div id="video-item-${video.videoId}" class="bg-white border-2 border-gray-200 rounded-lg p-4 transition-all hover:shadow-md">
