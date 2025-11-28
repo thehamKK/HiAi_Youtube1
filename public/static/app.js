@@ -685,15 +685,14 @@ async function analyzeChannel() {
             return;
         }
         
-        const { batchId, channelName, totalVideos, alreadyAnalyzed } = response.data;
+        const { batchId, channelName, totalVideos, requestedCount, message } = response.data;
         currentBatch = { batchId, channelName, totalVideos };
         
-        console.log('✅ 배치 작업 생성:', { batchId, channelName, totalVideos, alreadyAnalyzed });
+        console.log('✅ 배치 작업 생성:', { batchId, channelName, totalVideos, requestedCount });
         
         showChannelSuccess(
             `채널: ${channelName}\n` +
-            `분석 대상: ${totalVideos}개 영상\n` +
-            (alreadyAnalyzed > 0 ? `이미 분석됨: ${alreadyAnalyzed}개\n` : '') +
+            `${message}\n` +
             `배치 작업이 생성되었습니다. 자동 분석이 시작됩니다...`
         );
         

@@ -680,7 +680,10 @@ app.post('/api/channel/analyze', async (c) => {
       channelId,
       channelName,
       totalVideos: newVideos.length,
-      alreadyAnalyzed: videos.length - newVideos.length,
+      requestedCount: maxVideos,
+      message: newVideos.length < maxVideos 
+        ? `목표 ${maxVideos}개 중 ${newVideos.length}개 수집 (중복 제거 완료)`
+        : `목표 ${maxVideos}개 수집 완료 (중복 제거 완료)`,
       videos: newVideos
     })
     
