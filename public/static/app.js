@@ -192,11 +192,16 @@ async function downloadReport(analysisId) {
             return;
         }
         
+        // 파일명 안전하게 정리 (특수문자 제거, 길이 제한)
+        const safeTitle = (analysis.title || analysis.video_id)
+            .replace(/[<>:"/\\|?*]/g, '_')  // 파일명에 사용 불가능한 문자 제거
+            .substring(0, 100);  // 최대 100자로 제한
+        
         const blob = new Blob([analysis.summary], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${analysis.title || analysis.video_id}_요약보고서.txt`;
+        a.download = `${safeTitle}_요약보고서.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -221,11 +226,16 @@ async function downloadTranscript(analysisId, videoId) {
             return;
         }
         
+        // 파일명 안전하게 정리 (특수문자 제거, 길이 제한)
+        const safeTitle = (analysis.title || videoId)
+            .replace(/[<>:"/\\|?*]/g, '_')  // 파일명에 사용 불가능한 문자 제거
+            .substring(0, 100);  // 최대 100자로 제한
+        
         const blob = new Blob([analysis.transcript], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${analysis.title || videoId}_대본.txt`;
+        a.download = `${safeTitle}_대본.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
