@@ -395,81 +395,131 @@ async function getChannelVideosWithDuplicateRemoval(
   }
 }
 
-// Gemini API를 통한 대본 추출
-async function extractTranscriptWithGemini(videoUrl: string, apiKey: string): Promise<{ transcript: string, title?: string, uploadDate?: string } | null> {
-  try {
-    console.log(`🔵 Gemini API 호출 시작: ${videoUrl}`)
-    const startTime = Date.now()
-    
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
-    
-    const requestBody = {
-      contents: [{
-        parts: [
-          { text: "이 YouTube 영상의 전체 대본을 추출해주세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다." },
-          { 
-            fileData: {
-              mimeType: "video/youtube",
-              fileUri: videoUrl
-            }
-          }
-        ]
-      }]
-    }
-    
-    console.log('📤 Gemini API 요청 전송 중...')
-    
-    // 10분 타임아웃 설정
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => {
-      console.log('⏰ Gemini API 타임아웃 (10분 초과)')
-      controller.abort()
-    }, 10 * 60 * 1000) // 10분
+// Gemini API를 통한 대본 추출 (재시도 로직 포함)
+async function extractTranscriptWithGemini(videoUrl: string, apiKey: string, maxRetries: number = 10): Promise<{ transcript: string, title?: string, uploadDate?: string } | null> {
+  let attempt = 0
+  
+  while (attempt < maxRetries) {
+    attempt++
     
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal
-      })
+      console.log(`🔵 Gemini API 호출 시작 (시도 ${attempt}/${maxRetries}): ${videoUrl}`)
+      const startTime = Date.now()
       
-      clearTimeout(timeoutId)
-      console.log(`📥 Gemini API 응답 수신: ${response.status}`)
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
       
-      const data = await response.json()
+      const requestBody = {
+        contents: [{
+          parts: [
+            { text: "이 YouTube 영상의 전체 대본을 추출해주세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다." },
+            { 
+              fileData: {
+                mimeType: "video/youtube",
+                fileUri: videoUrl
+              }
+            }
+          ]
+        }]
+      }
       
-      const elapsed = Math.round((Date.now() - startTime) / 1000)
-      console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+      console.log('📤 Gemini API 요청 전송 중...')
       
-      if (data.error) {
-        console.error('❌ Gemini API 에러:', data.error.message)
+      // 10분 타임아웃 설정
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ Gemini API 타임아웃 (10분 초과)')
+        controller.abort()
+      }, 10 * 60 * 1000) // 10분
+      
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        })
+        
+        clearTimeout(timeoutId)
+        console.log(`📥 Gemini API 응답 수신: ${response.status}`)
+        
+        const data = await response.json()
+        
+        const elapsed = Math.round((Date.now() - startTime) / 1000)
+        console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+        
+        // 503 과부하 에러 또는 429 Rate Limit 에러 - 재시도
+        if (response.status === 503 || response.status === 429) {
+          const waitTime = attempt * 30 // 30초, 60초, 90초...
+          console.log(`⚠️ Gemini API 과부하/Rate Limit (${response.status}). ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+          
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+            continue // 재시도
+          } else {
+            console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 포기`)
+            return null
+          }
+        }
+        
+        if (data.error) {
+          console.error('❌ Gemini API 에러:', data.error.message)
+          
+          // 과부하 메시지가 포함된 경우 재시도
+          if (data.error.message.includes('overloaded') || data.error.message.includes('quota')) {
+            const waitTime = attempt * 30
+            console.log(`⚠️ Gemini 과부하 메시지 감지. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+            
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+              continue // 재시도
+            }
+          }
+          
+          return null
+        }
+        
+        if (data.candidates && data.candidates[0]?.content?.parts) {
+          const transcript = data.candidates[0].content.parts[0].text
+          console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초, 시도 ${attempt}회)`)
+          return { transcript }
+        }
+        
+        console.log('⚠️ Gemini API 응답에 대본 없음')
+        return null
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId)
+        
+        if (fetchError.name === 'AbortError') {
+          console.error('❌ Gemini API 타임아웃 (10분 초과)')
+          
+          if (attempt < maxRetries) {
+            console.log(`⏳ 타임아웃 후 30초 대기 후 재시도 (${attempt}/${maxRetries})`)
+            await new Promise(resolve => setTimeout(resolve, 30000))
+            continue // 재시도
+          } else {
+            throw new Error('Gemini API 타임아웃: 10분 이내에 응답받지 못했습니다.')
+          }
+        }
+        
+        console.error('❌ Gemini API fetch 오류:', fetchError.message)
+        throw fetchError
+      }
+    } catch (error) {
+      console.error(`❌ Gemini 대본 추출 실패 (시도 ${attempt}/${maxRetries}):`, error)
+      
+      if (attempt >= maxRetries) {
         return null
       }
       
-      if (data.candidates && data.candidates[0]?.content?.parts) {
-        const transcript = data.candidates[0].content.parts[0].text
-        console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초)`)
-        return { transcript }
-      }
-      
-      console.log('⚠️ Gemini API 응답에 대본 없음')
-      return null
-    } catch (fetchError: any) {
-      clearTimeout(timeoutId)
-      
-      if (fetchError.name === 'AbortError') {
-        console.error('❌ Gemini API 타임아웃 (10분 초과)')
-        throw new Error('Gemini API 타임아웃: 10분 이내에 응답받지 못했습니다.')
-      }
-      
-      console.error('❌ Gemini API fetch 오류:', fetchError.message)
-      throw fetchError
+      // 일반 에러도 재시도
+      const waitTime = attempt * 30
+      console.log(`⏳ ${waitTime}초 후 재시도...`)
+      await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
     }
-  } catch (error) {
-    console.error('❌ Gemini 대본 추출 실패:', error)
-    return null
   }
+  
+  console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 완전 포기`)
+  return null
 }
 
 // YouTube 자막 API 폴백
@@ -484,12 +534,18 @@ async function extractTranscriptFromYouTube(videoId: string): Promise<string | n
   }
 }
 
-// Gemini API를 통한 요약 보고서 생성
-async function generateSummaryWithGemini(transcript: string, apiKey: string, videoTitle?: string): Promise<string | null> {
-  try {
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+// Gemini API를 통한 요약 보고서 생성 (재시도 로직 포함)
+async function generateSummaryWithGemini(transcript: string, apiKey: string, videoTitle?: string, maxRetries: number = 10): Promise<string | null> {
+  let attempt = 0
+  
+  while (attempt < maxRetries) {
+    attempt++
     
-    const prompt = `다음은 YouTube 영상의 대본입니다${videoTitle ? ` (제목: ${videoTitle})` : ''}. 이 대본을 읽고 1페이지 분량의 요약 보고서를 작성해주세요.
+    try {
+      console.log(`📊 Gemini 요약 생성 시작 (시도 ${attempt}/${maxRetries})`)
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+      
+      const prompt = `다음은 YouTube 영상의 대본입니다${videoTitle ? ` (제목: ${videoTitle})` : ''}. 이 대본을 읽고 1페이지 분량의 요약 보고서를 작성해주세요.
 
 보고서 형식:
 1. 핵심 내용 요약 (3-5문장)
@@ -498,30 +554,76 @@ async function generateSummaryWithGemini(transcript: string, apiKey: string, vid
 
 대본:
 ${transcript}`
-    
-    const requestBody = {
-      contents: [{
-        parts: [{ text: prompt }]
-      }]
+      
+      const requestBody = {
+        contents: [{
+          parts: [{ text: prompt }]
+        }]
+      }
+      
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      })
+      
+      const data = await response.json()
+      
+      // 503 과부하 에러 또는 429 Rate Limit 에러 - 재시도
+      if (response.status === 503 || response.status === 429) {
+        const waitTime = attempt * 30
+        console.log(`⚠️ Gemini API 과부하/Rate Limit (${response.status}). ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+          continue // 재시도
+        } else {
+          console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 포기`)
+          return null
+        }
+      }
+      
+      if (data.error) {
+        console.error('❌ Gemini 요약 생성 에러:', data.error.message)
+        
+        // 과부하 메시지가 포함된 경우 재시도
+        if (data.error.message.includes('overloaded') || data.error.message.includes('quota')) {
+          const waitTime = attempt * 30
+          console.log(`⚠️ Gemini 과부하 메시지 감지. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+          
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+            continue // 재시도
+          }
+        }
+        
+        return null
+      }
+      
+      if (data.candidates && data.candidates[0]?.content?.parts) {
+        const summary = data.candidates[0].content.parts[0].text
+        console.log(`✅ 요약 생성 성공 (${summary.length}자, 시도 ${attempt}회)`)
+        return summary
+      }
+      
+      console.log('⚠️ Gemini API 응답에 요약 없음')
+      return null
+    } catch (error) {
+      console.error(`❌ Gemini 요약 생성 실패 (시도 ${attempt}/${maxRetries}):`, error)
+      
+      if (attempt >= maxRetries) {
+        return null
+      }
+      
+      // 일반 에러도 재시도
+      const waitTime = attempt * 30
+      console.log(`⏳ ${waitTime}초 후 재시도...`)
+      await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
     }
-    
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    })
-    
-    const data = await response.json()
-    
-    if (data.candidates && data.candidates[0]?.content?.parts) {
-      return data.candidates[0].content.parts[0].text
-    }
-    
-    return null
-  } catch (error) {
-    console.error('Gemini 요약 생성 실패:', error)
-    return null
   }
+  
+  console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 완전 포기`)
+  return null
 }
 
 // 배치 영상 자동 분석 함수
