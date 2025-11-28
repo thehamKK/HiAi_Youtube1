@@ -237,7 +237,10 @@ async function getChannelVideos(
   pageToken?: string
 ): Promise<{ videos: any[], nextPageToken?: string } | null> {
   try {
-    let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&maxResults=${Math.min(maxResults, 50)}&order=date&type=video&key=${apiKey}`
+    // 먼저 채널의 업로드 재생목록 ID 가져오기 (UU + channelId[2:])
+    const uploadsPlaylistId = 'UU' + channelId.substring(2)
+    
+    let url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${Math.min(maxResults, 50)}&key=${apiKey}`
     
     if (pageToken) {
       url += `&pageToken=${pageToken}`
@@ -256,11 +259,18 @@ async function getChannelVideos(
     }
     
     const videos = data.items.map((item: any) => ({
-      videoId: item.id.videoId,
+      videoId: item.snippet.resourceId.videoId,
       title: item.snippet.title,
-      url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+      url: `https://www.youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
       publishedAt: item.snippet.publishedAt
     }))
+    
+    // 디버깅: nextPageToken 상태 로깅
+    if (data.nextPageToken) {
+      console.log(`🔄 다음 페이지 토큰 있음 (pageInfo: total=${data.pageInfo?.totalResults || 'unknown'})`)
+    } else {
+      console.log(`⛔ 다음 페이지 토큰 없음 (items: ${videos.length}개)`)
+    }
     
     return {
       videos,
@@ -282,13 +292,13 @@ async function getChannelVideosWithDuplicateRemoval(
   try {
     let allVideos: any[] = []
     let pageToken: string | undefined = undefined
-    let attempts = 0
-    const maxAttempts = 5 // 최대 5페이지까지만 시도
+    let pageCount = 0
+    const maxPages = Math.ceil(targetCount / 50) + 10 // 목표 개수 + 여유분 (Shorts/중복 고려)
     
-    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개, Shorts 제외)`)
+    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개, 최대 ${maxPages}페이지, Shorts 제외)`)
     
-    while (allVideos.length < targetCount && attempts < maxAttempts) {
-      attempts++
+    while (allVideos.length < targetCount && pageCount < maxPages) {
+      pageCount++
       
       // YouTube API에서 영상 목록 가져오기 (페이지당 최대 50개)
       const result = await getChannelVideos(channelId, apiKey, 50, pageToken)
@@ -305,7 +315,7 @@ async function getChannelVideosWithDuplicateRemoval(
         break
       }
       
-      console.log(`📄 ${attempts}페이지: ${videos.length}개 영상 가져옴`)
+      console.log(`📄 ${pageCount}페이지: ${videos.length}개 영상 가져옴 (누적: ${allVideos.length}개)`)
       
       // Shorts 영상 필터링 (제목에 'shorts', 'short', '#shorts' 포함된 영상 제외)
       const filteredVideos = videos.filter((v: any) => {
@@ -366,12 +376,16 @@ async function getChannelVideosWithDuplicateRemoval(
     
     if (allVideos.length < targetCount) {
       console.log(`⚠️ 경고: 목표 개수 미달 (${allVideos.length}/${targetCount}개)`)
-      console.log(`   - 채널에 더 이상 새로운 영상이 없거나`)
-      console.log(`   - 대부분의 영상이 이미 분석되었거나`)
-      console.log(`   - Shorts 영상이 많아 필터링됨`)
+      if (pageCount >= maxPages) {
+        console.log(`   - 최대 페이지 제한 도달 (${maxPages}페이지)`)
+      } else {
+        console.log(`   - 채널에 더 이상 새로운 영상이 없거나`)
+        console.log(`   - 대부분의 영상이 이미 분석되었거나`)
+        console.log(`   - Shorts 영상이 많아 필터링됨`)
+      }
     }
     
-    console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개, Shorts 제외)`)
+    console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개, ${pageCount}페이지 검색, Shorts 제외)`)
     
     return allVideos
     
