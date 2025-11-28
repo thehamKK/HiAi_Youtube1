@@ -735,28 +735,38 @@ async function startBatchProcessing(batchId, totalVideos, channelName) {
             // 진행 상황 폴링
             const statusResponse = await axios.get(`/api/channel/status/${batchId}`);
             
-            if (!statusResponse.data.success) {
-                throw new Error('상태 확인 실패');
+            if (statusResponse.data.error) {
+                throw new Error(statusResponse.data.error);
             }
             
-            const status = statusResponse.data.status;
-            completed = status.completed;
-            failed = status.failed;
+            const batch = statusResponse.data.batch;
+            const progress = statusResponse.data.progress;
+            const videos = statusResponse.data.videos || [];
+            
+            completed = progress.completed;
+            failed = progress.failed;
             
             // 진행률 업데이트
-            const progress = Math.round(((completed + failed) / totalVideos) * 100);
-            document.getElementById('channelProgressBar').style.width = `${progress}%`;
+            const progressPercent = Math.round(((completed + failed) / totalVideos) * 100);
+            document.getElementById('channelProgressBar').style.width = `${progressPercent}%`;
             document.getElementById('channelProgressText').textContent = 
                 `${completed + failed} / ${totalVideos} 완료 (성공: ${completed}, 실패: ${failed})`;
             
             // 현재 처리 중인 영상 표시
-            if (status.currentVideo) {
+            const processingVideo = videos.find(v => v.status === 'processing');
+            if (processingVideo) {
                 document.getElementById('channelCurrentVideo').textContent = 
-                    `현재 분석 중: ${status.currentVideo}`;
+                    `현재 분석 중: ${processingVideo.video_title}`;
+            } else if (completed + failed < totalVideos) {
+                const pendingVideo = videos.find(v => v.status === 'pending');
+                if (pendingVideo) {
+                    document.getElementById('channelCurrentVideo').textContent = 
+                        `대기 중: ${pendingVideo.video_title}`;
+                }
             }
             
             // 완료 확인
-            if (status.batchStatus === 'completed') {
+            if (batch.status === 'completed') {
                 break;
             }
             
@@ -798,13 +808,12 @@ async function displayChannelResults(batchId) {
     try {
         const response = await axios.get(`/api/channel/status/${batchId}`);
         
-        if (!response.data.success) {
+        if (response.data.error) {
             showChannelError('분석 결과를 불러올 수 없습니다.');
             return;
         }
         
-        const status = response.data.status;
-        const videos = status.videos || [];
+        const videos = response.data.videos || [];
         
         if (videos.length === 0) {
             showChannelError('분석된 영상이 없습니다.');
@@ -835,11 +844,11 @@ async function downloadAllReports(batchId) {
         
         // 배치 상태 가져오기
         const statusResponse = await axios.get(`/api/channel/status/${batchId}`);
-        if (!statusResponse.data.success) {
-            throw new Error('배치 상태를 가져올 수 없습니다.');
+        if (statusResponse.data.error) {
+            throw new Error(statusResponse.data.error);
         }
         
-        const videos = statusResponse.data.status.videos || [];
+        const videos = statusResponse.data.videos || [];
         const completedVideos = videos.filter(v => v.status === 'completed' && v.analysis_id);
         
         if (completedVideos.length === 0) {
