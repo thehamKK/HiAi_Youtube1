@@ -192,16 +192,22 @@ async function downloadReport(analysisId) {
             return;
         }
         
-        // 파일명 안전하게 정리 (특수문자 제거, 길이 제한)
-        const safeTitle = (analysis.title || analysis.video_id)
-            .replace(/[<>:"/\\|?*]/g, '_')  // 파일명에 사용 불가능한 문자 제거
-            .substring(0, 100);  // 최대 100자로 제한
+        // 파일명 규칙: 영상업로드날짜_영상제목에서3단어만_영상유튜브주소_요약보고서.txt
+        const uploadDate = analysis.upload_date || 'NODATE';
+        const titleWords = (analysis.title || '')
+            .replace(/[<>:"/\\|?*()]/g, '')  // 특수문자 제거
+            .split(/\s+/)  // 공백으로 단어 분리
+            .filter(word => word.length > 0)  // 빈 문자열 제거
+            .slice(0, 3)  // 첫 3단어만
+            .join('_');  // 언더스코어로 연결
+        const videoUrl = analysis.video_id;
+        const fileName = `${uploadDate}_${titleWords}_${videoUrl}_요약보고서.txt`;
         
         const blob = new Blob([analysis.summary], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${safeTitle}_요약보고서.txt`;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -226,16 +232,22 @@ async function downloadTranscript(analysisId, videoId) {
             return;
         }
         
-        // 파일명 안전하게 정리 (특수문자 제거, 길이 제한)
-        const safeTitle = (analysis.title || videoId)
-            .replace(/[<>:"/\\|?*]/g, '_')  // 파일명에 사용 불가능한 문자 제거
-            .substring(0, 100);  // 최대 100자로 제한
+        // 파일명 규칙: 영상업로드날짜_영상제목에서3단어만_영상유튜브주소_대본전문.txt
+        const uploadDate = analysis.upload_date || 'NODATE';
+        const titleWords = (analysis.title || '')
+            .replace(/[<>:"/\\|?*()]/g, '')  // 특수문자 제거
+            .split(/\s+/)  // 공백으로 단어 분리
+            .filter(word => word.length > 0)  // 빈 문자열 제거
+            .slice(0, 3)  // 첫 3단어만
+            .join('_');  // 언더스코어로 연결
+        const videoUrl = analysis.video_id;
+        const fileName = `${uploadDate}_${titleWords}_${videoUrl}_대본전문.txt`;
         
         const blob = new Blob([analysis.transcript], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${safeTitle}_대본.txt`;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
