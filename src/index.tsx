@@ -214,6 +214,9 @@ async function getChannelVideosWithDuplicateRemoval(
 // Gemini API를 통한 대본 추출
 async function extractTranscriptWithGemini(videoUrl: string, apiKey: string): Promise<{ transcript: string, title?: string, uploadDate?: string } | null> {
   try {
+    console.log(`🔵 Gemini API 호출 시작: ${videoUrl}`)
+    const startTime = Date.now()
+    
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
     
     const requestBody = {
@@ -230,22 +233,34 @@ async function extractTranscriptWithGemini(videoUrl: string, apiKey: string): Pr
       }]
     }
     
+    console.log('📤 Gemini API 요청 전송 중...')
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
     })
     
+    console.log(`📥 Gemini API 응답 수신: ${response.status}`)
     const data = await response.json()
+    
+    const elapsed = Math.round((Date.now() - startTime) / 1000)
+    console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+    
+    if (data.error) {
+      console.error('❌ Gemini API 에러:', data.error.message)
+      return null
+    }
     
     if (data.candidates && data.candidates[0]?.content?.parts) {
       const transcript = data.candidates[0].content.parts[0].text
+      console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초)`)
       return { transcript }
     }
     
+    console.log('⚠️ Gemini API 응답에 대본 없음')
     return null
   } catch (error) {
-    console.error('Gemini 대본 추출 실패:', error)
+    console.error('❌ Gemini 대본 추출 실패:', error)
     return null
   }
 }
