@@ -648,6 +648,189 @@ function hideLoading() {
     document.getElementById('loading').classList.add('hidden');
 }
 
+// ==================== 분석 히스토리 ====================
+
+// 히스토리 로드
+async function loadHistory() {
+    try {
+        const response = await axios.get('/api/history');
+        
+        if (!response.data.success) {
+            console.error('히스토리 로드 실패:', response.data.error);
+            return;
+        }
+        
+        displayHistory(response.data.analyses);
+    } catch (error) {
+        console.error('히스토리 로드 오류:', error);
+    }
+}
+
+// 히스토리 표시
+function displayHistory(analyses) {
+    const historyDiv = document.getElementById('history');
+    
+    if (!analyses || analyses.length === 0) {
+        historyDiv.innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <i class="fas fa-inbox text-4xl mb-4"></i>
+                <p>아직 분석된 영상이 없습니다.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    historyDiv.innerHTML = analyses.map(item => `
+        <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-orange-500 transition-colors">
+            <div class="flex justify-between items-start mb-2">
+                <div class="flex-1">
+                    <h3 class="font-bold text-lg text-gray-800 mb-1">
+                        ${item.title || '제목 없음'}
+                    </h3>
+                    <p class="text-sm text-gray-500 mb-2">
+                        <i class="fas fa-link mr-1"></i>
+                        <a href="${item.url}" target="_blank" class="text-blue-600 hover:underline">
+                            ${item.video_id}
+                        </a>
+                    </p>
+                    ${item.channel_name ? `
+                        <p class="text-sm text-gray-500 mb-2">
+                            <i class="fas fa-tv mr-1"></i>
+                            채널: ${item.channel_name}
+                        </p>
+                    ` : ''}
+                    <p class="text-xs text-gray-400">
+                        <i class="fas fa-clock mr-1"></i>
+                        분석일: ${new Date(item.created_at).toLocaleString('ko-KR')}
+                    </p>
+                </div>
+                <div class="ml-4">
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${
+                        item.status === 'completed' 
+                            ? 'bg-green-100 text-green-800' 
+                            : item.status === 'transcript_only'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-gray-100 text-gray-800'
+                    }">
+                        ${
+                            item.status === 'completed' 
+                                ? '✓ 완료' 
+                                : item.status === 'transcript_only'
+                                ? '대본만'
+                                : item.status
+                        }
+                    </span>
+                </div>
+            </div>
+            
+            <div class="mt-4 flex space-x-2">
+                ${item.status === 'completed' ? `
+                    <button 
+                        onclick="viewAnalysis('${item.id}')" 
+                        class="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors text-sm font-semibold"
+                    >
+                        <i class="fas fa-eye mr-1"></i>
+                        보고서 보기
+                    </button>
+                    <button 
+                        onclick="downloadHistoryReport('${item.id}', '${item.video_id}', '${(item.title || '').replace(/'/g, "\\'")}', '${item.upload_date || ''}')" 
+                        class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold"
+                    >
+                        <i class="fas fa-download mr-1"></i>
+                        보고서 다운로드
+                    </button>
+                ` : ''}
+                <button 
+                    onclick="downloadHistoryTranscript('${item.id}', '${item.video_id}', '${(item.title || '').replace(/'/g, "\\'")}', '${item.upload_date || ''}')" 
+                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
+                >
+                    <i class="fas fa-download mr-1"></i>
+                    대본 다운로드
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+// 히스토리에서 분석 보기
+async function viewAnalysis(analysisId) {
+    try {
+        const response = await axios.get(`/api/analysis/${analysisId}`);
+        
+        if (!response.data.success) {
+            showError('분석 결과를 불러올 수 없습니다.');
+            return;
+        }
+        
+        const analysis = response.data.analysis;
+        
+        // 현재 분석 설정
+        currentAnalysis = {
+            analysisId: analysis.id,
+            videoId: analysis.video_id,
+            title: analysis.title,
+            uploadDate: analysis.upload_date,
+            summary: analysis.summary,
+            transcript: analysis.transcript
+        };
+        
+        // 결과 표시
+        document.getElementById('results').classList.remove('hidden');
+        document.getElementById('summary').innerHTML = analysis.summary.replace(/\n/g, '<br>');
+        document.getElementById('transcript').textContent = analysis.transcript;
+        
+        // 스크롤
+        document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        
+        showSuccess('분석 결과를 불러왔습니다.');
+    } catch (error) {
+        console.error('분석 보기 오류:', error);
+        showError('분석 결과를 불러오는 중 오류가 발생했습니다.');
+    }
+}
+
+// 히스토리에서 보고서 다운로드
+async function downloadHistoryReport(analysisId, videoId, title, uploadDate) {
+    try {
+        const response = await axios.get(`/api/analysis/${analysisId}`);
+        
+        if (!response.data.success || !response.data.analysis.summary) {
+            showError('보고서를 찾을 수 없습니다.');
+            return;
+        }
+        
+        const summary = response.data.analysis.summary;
+        const filename = `[${uploadDate || 'Unknown'}] ${title || videoId} - 요약보고서.txt`;
+        
+        downloadTextFile(summary, filename);
+        showSuccess('보고서가 다운로드되었습니다.');
+    } catch (error) {
+        console.error('보고서 다운로드 오류:', error);
+        showError('보고서 다운로드 중 오류가 발생했습니다.');
+    }
+}
+
+// 히스토리에서 대본 다운로드
+async function downloadHistoryTranscript(analysisId, videoId, title, uploadDate) {
+    try {
+        const response = await axios.get(`/api/analysis/${analysisId}`);
+        
+        if (!response.data.success || !response.data.analysis.transcript) {
+            showError('대본을 찾을 수 없습니다.');
+            return;
+        }
+        
+        const transcript = response.data.analysis.transcript;
+        const filename = `[${uploadDate || 'Unknown'}] ${title || videoId} - 대본.txt`;
+        
+        downloadTextFile(transcript, filename);
+        showSuccess('대본이 다운로드되었습니다.');
+    } catch (error) {
+        console.error('대본 다운로드 오류:', error);
+        showError('대본 다운로드 중 오류가 발생했습니다.');
+    }
+}
+
 // 페이지 로드 시 히스토리 자동 로드
 document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
