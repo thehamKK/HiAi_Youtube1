@@ -194,6 +194,13 @@ async function getChannelVideosWithDuplicateRemoval(
       pageToken = nextPageToken
     }
     
+    if (allVideos.length < targetCount) {
+      console.log(`⚠️ 경고: 목표 개수 미달 (${allVideos.length}/${targetCount}개)`)
+      console.log(`   - 채널에 더 이상 새로운 영상이 없거나`)
+      console.log(`   - 대부분의 영상이 이미 분석되었거나`)
+      console.log(`   - Shorts 영상이 많아 필터링됨`)
+    }
+    
     console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개, Shorts 제외)`)
     
     return allVideos
@@ -698,6 +705,17 @@ app.post('/api/channel/analyze', async (c) => {
       })()
     )
     
+    // 메시지 생성
+    let message = ''
+    if (newVideos.length === 0) {
+      message = `새로 분석할 영상이 없습니다 (모두 중복 또는 Shorts)`
+    } else if (newVideos.length < maxVideos) {
+      const shortage = maxVideos - newVideos.length
+      message = `목표 ${maxVideos}개 중 ${newVideos.length}개 수집 (${shortage}개 부족: 중복 제거 및 Shorts 필터링 완료)`
+    } else {
+      message = `목표 ${maxVideos}개 수집 완료 (중복 제거 및 Shorts 필터링 완료)`
+    }
+    
     return c.json({
       success: true,
       batchId,
@@ -705,9 +723,7 @@ app.post('/api/channel/analyze', async (c) => {
       channelName,
       totalVideos: newVideos.length,
       requestedCount: maxVideos,
-      message: newVideos.length < maxVideos 
-        ? `목표 ${maxVideos}개 중 ${newVideos.length}개 수집 (중복 제거 완료)`
-        : `목표 ${maxVideos}개 수집 완료 (중복 제거 완료)`,
+      message,
       videos: newVideos
     })
     
