@@ -1333,4 +1333,201 @@ app.get('/favicon.ico', (c) => {
   return c.body(null, 204)
 })
 
+// ==================== 이메일 전송 API ====================
+
+// 단일 분석 결과 이메일 전송
+app.post('/api/send-email/single/:id', async (c) => {
+  const { env } = c
+  const id = parseInt(c.req.param('id'))
+  const { email } = await c.req.json()
+  
+  if (!email) {
+    return c.json({ error: '이메일 주소가 필요합니다.' }, 400)
+  }
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    // 분석 결과 조회
+    const result = await env.DB.prepare(`
+      SELECT * FROM analyses WHERE id = ?
+    `).bind(id).first()
+    
+    if (!result) {
+      return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
+    }
+    
+    // TODO: 실제 이메일 전송 로직 (SendGrid, Resend 등)
+    // 현재는 시뮬레이션
+    console.log(`📧 이메일 전송 시뮬레이션: ${email}`)
+    console.log(`  - 분석 ID: ${id}`)
+    console.log(`  - 영상 ID: ${result.video_id}`)
+    console.log(`  - 대본 길이: ${result.transcript?.length || 0}`)
+    console.log(`  - 요약 길이: ${result.summary?.length || 0}`)
+    
+    return c.json({
+      success: true,
+      message: `${email}로 전송 완료 (시뮬레이션)`,
+      analysisId: id,
+      email: email
+    })
+  } catch (error: any) {
+    console.error('❌ 이메일 전송 실패:', error)
+    return c.json({
+      error: '이메일 전송 실패',
+      details: error.message
+    }, 500)
+  }
+})
+
+// 일괄 분석 결과 이메일 전송 (배치 단위)
+app.post('/api/send-email/batch/:batchId', async (c) => {
+  const { env } = c
+  const batchId = parseInt(c.req.param('batchId'))
+  const { email } = await c.req.json()
+  
+  if (!email) {
+    return c.json({ error: '이메일 주소가 필요합니다.' }, 400)
+  }
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    // 배치 정보 조회
+    const batch = await env.DB.prepare(`
+      SELECT * FROM batch_jobs WHERE id = ?
+    `).bind(batchId).first()
+    
+    if (!batch) {
+      return c.json({ error: '배치를 찾을 수 없습니다.' }, 404)
+    }
+    
+    // 완료된 영상들 조회
+    const videosResult = await env.DB.prepare(`
+      SELECT bv.*, a.transcript, a.summary
+      FROM batch_videos bv
+      LEFT JOIN analyses a ON bv.analysis_id = a.id
+      WHERE bv.batch_id = ? AND bv.status = 'completed'
+    `).bind(batchId).all()
+    
+    const completedVideos = videosResult.results || []
+    
+    // TODO: 실제 이메일 전송 로직
+    console.log(`📧 배치 이메일 전송 시뮬레이션: ${email}`)
+    console.log(`  - 배치 ID: ${batchId}`)
+    console.log(`  - 채널: ${batch.channel_name}`)
+    console.log(`  - 완료된 영상: ${completedVideos.length}개`)
+    
+    return c.json({
+      success: true,
+      message: `${email}로 ${completedVideos.length}개 영상 분석 결과 전송 완료 (시뮬레이션)`,
+      batchId: batchId,
+      completedCount: completedVideos.length,
+      email: email
+    })
+  } catch (error: any) {
+    console.error('❌ 배치 이메일 전송 실패:', error)
+    return c.json({
+      error: '이메일 전송 실패',
+      details: error.message
+    }, 500)
+  }
+})
+
+// ==================== 구글드라이브 전송 API ====================
+
+// 단일 분석 결과 구글드라이브 전송
+app.post('/api/send-drive/single/:id', async (c) => {
+  const { env } = c
+  const id = parseInt(c.req.param('id'))
+  const { driveFolder } = await c.req.json()
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    // 분석 결과 조회
+    const result = await env.DB.prepare(`
+      SELECT * FROM analyses WHERE id = ?
+    `).bind(id).first()
+    
+    if (!result) {
+      return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
+    }
+    
+    // TODO: 실제 구글드라이브 업로드 로직
+    console.log(`📁 구글드라이브 전송 시뮬레이션`)
+    console.log(`  - 분석 ID: ${id}`)
+    console.log(`  - 폴더: ${driveFolder || '루트'}`)
+    console.log(`  - 영상 ID: ${result.video_id}`)
+    
+    return c.json({
+      success: true,
+      message: `구글드라이브에 업로드 완료 (시뮬레이션)`,
+      analysisId: id,
+      driveFolder: driveFolder || '루트'
+    })
+  } catch (error: any) {
+    console.error('❌ 구글드라이브 전송 실패:', error)
+    return c.json({
+      error: '구글드라이브 전송 실패',
+      details: error.message
+    }, 500)
+  }
+})
+
+// 일괄 분석 결과 구글드라이브 전송
+app.post('/api/send-drive/batch/:batchId', async (c) => {
+  const { env } = c
+  const batchId = parseInt(c.req.param('batchId'))
+  const { driveFolder } = await c.req.json()
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    // 배치 정보 및 완료된 영상들 조회
+    const batch = await env.DB.prepare(`
+      SELECT * FROM batch_jobs WHERE id = ?
+    `).bind(batchId).first()
+    
+    if (!batch) {
+      return c.json({ error: '배치를 찾을 수 없습니다.' }, 404)
+    }
+    
+    const videosResult = await env.DB.prepare(`
+      SELECT COUNT(*) as count FROM batch_videos 
+      WHERE batch_id = ? AND status = 'completed'
+    `).bind(batchId).first()
+    
+    const completedCount = (videosResult as any)?.count || 0
+    
+    // TODO: 실제 구글드라이브 업로드 로직
+    console.log(`📁 배치 구글드라이브 전송 시뮬레이션`)
+    console.log(`  - 배치 ID: ${batchId}`)
+    console.log(`  - 폴더: ${driveFolder || '루트'}`)
+    console.log(`  - 완료된 영상: ${completedCount}개`)
+    
+    return c.json({
+      success: true,
+      message: `구글드라이브에 ${completedCount}개 파일 업로드 완료 (시뮬레이션)`,
+      batchId: batchId,
+      completedCount: completedCount,
+      driveFolder: driveFolder || '루트'
+    })
+  } catch (error: any) {
+    console.error('❌ 배치 구글드라이브 전송 실패:', error)
+    return c.json({
+      error: '구글드라이브 전송 실패',
+      details: error.message
+    }, 500)
+  }
+})
+
 export default app

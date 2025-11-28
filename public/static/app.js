@@ -603,38 +603,58 @@ function createHistoryItem(analysis, source) {
                     ${statusBadge}
                 </div>
             </div>
-            <div class="flex space-x-2 mt-3">
-                <button 
-                    onclick="viewAnalysis(${analysis.id})" 
-                    class="flex-1 bg-blue-500 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-600 transition-colors"
-                >
-                    <i class="fas fa-eye mr-1"></i>
-                    결과 보기
-                </button>
-                <a 
-                    href="${analysis.url}" 
-                    target="_blank" 
-                    class="flex-1 bg-red-500 text-white px-3 py-1.5 rounded text-xs hover:bg-red-600 transition-colors text-center"
-                >
-                    <i class="fab fa-youtube mr-1"></i>
-                    YouTube
-                </a>
-                ${analysis.status === 'completed' ? `
+            <div class="space-y-2 mt-3">
+                <!-- 첫 번째 줄: 보기/YouTube/보고서/대본 -->
+                <div class="flex space-x-2">
                     <button 
-                        onclick="downloadReport(${analysis.id})" 
-                        class="flex-1 bg-green-500 text-white px-3 py-1.5 rounded text-xs hover:bg-green-600 transition-colors"
+                        onclick="viewAnalysis(${analysis.id})" 
+                        class="flex-1 bg-blue-500 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-600 transition-colors"
                     >
-                        <i class="fas fa-download mr-1"></i>
-                        보고서
+                        <i class="fas fa-eye mr-1"></i>
+                        결과 보기
                     </button>
-                ` : ''}
-                <button 
-                    onclick="downloadTranscript(${analysis.id}, '${analysis.video_id}')" 
-                    class="flex-1 bg-gray-500 text-white px-3 py-1.5 rounded text-xs hover:bg-gray-600 transition-colors"
-                >
-                    <i class="fas fa-file-alt mr-1"></i>
-                    대본
-                </button>
+                    <a 
+                        href="${analysis.url}" 
+                        target="_blank" 
+                        class="flex-1 bg-red-500 text-white px-3 py-1.5 rounded text-xs hover:bg-red-600 transition-colors text-center"
+                    >
+                        <i class="fab fa-youtube mr-1"></i>
+                        YouTube
+                    </a>
+                    ${analysis.status === 'completed' ? `
+                        <button 
+                            onclick="downloadReport(${analysis.id})" 
+                            class="flex-1 bg-green-500 text-white px-3 py-1.5 rounded text-xs hover:bg-green-600 transition-colors"
+                        >
+                            <i class="fas fa-download mr-1"></i>
+                            보고서
+                        </button>
+                    ` : ''}
+                    <button 
+                        onclick="downloadTranscript(${analysis.id}, '${analysis.video_id}')" 
+                        class="flex-1 bg-gray-500 text-white px-3 py-1.5 rounded text-xs hover:bg-gray-600 transition-colors"
+                    >
+                        <i class="fas fa-file-alt mr-1"></i>
+                        대본
+                    </button>
+                </div>
+                <!-- 두 번째 줄: 이메일/구글드라이브 전송 -->
+                <div class="flex space-x-2">
+                    <button 
+                        onclick="sendToEmail(${analysis.id}, '${source}')" 
+                        class="flex-1 bg-purple-500 text-white px-3 py-1.5 rounded text-xs hover:bg-purple-600 transition-colors"
+                    >
+                        <i class="fas fa-envelope mr-1"></i>
+                        이메일 전송
+                    </button>
+                    <button 
+                        onclick="sendToDrive(${analysis.id}, '${source}')" 
+                        class="flex-1 bg-indigo-500 text-white px-3 py-1.5 rounded text-xs hover:bg-indigo-600 transition-colors"
+                    >
+                        <i class="fab fa-google-drive mr-1"></i>
+                        드라이브 전송
+                    </button>
+                </div>
             </div>
         </div>
     `;
@@ -794,3 +814,76 @@ window.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 페이지 로드 완료');
     loadHistory();
 });
+
+// ==================== 이메일/드라이브 전송 ====================
+
+// 이메일 전송 함수
+async function sendToEmail(analysisId, source) {
+    const email = prompt('이메일 주소를 입력하세요:', localStorage.getItem('lastEmail') || '');
+    
+    if (!email) {
+        return;
+    }
+    
+    // 이메일 주소 저장
+    localStorage.setItem('lastEmail', email);
+    
+    try {
+        showLoading('이메일 전송 중...');
+        
+        const endpoint = source === 'batch' 
+            ? `/api/send-email/batch/${analysisId}`
+            : `/api/send-email/single/${analysisId}`;
+        
+        const response = await axios.post(endpoint, { email });
+        
+        hideLoading();
+        
+        if (response.data.success) {
+            showSuccess(response.data.message);
+        } else {
+            showError(response.data.error || '이메일 전송 실패');
+        }
+    } catch (error) {
+        hideLoading();
+        console.error('이메일 전송 오류:', error);
+        showError('이메일 전송 실패: ' + (error.response?.data?.error || error.message));
+    }
+}
+
+// 구글드라이브 전송 함수
+async function sendToDrive(analysisId, source) {
+    const driveFolder = prompt('구글드라이브 폴더 이름을 입력하세요 (선택사항):', localStorage.getItem('lastDriveFolder') || '');
+    
+    // 취소를 누르면 null이 반환되므로 확인
+    if (driveFolder === null) {
+        return;
+    }
+    
+    // 폴더 이름 저장
+    if (driveFolder) {
+        localStorage.setItem('lastDriveFolder', driveFolder);
+    }
+    
+    try {
+        showLoading('구글드라이브 전송 중...');
+        
+        const endpoint = source === 'batch' 
+            ? `/api/send-drive/batch/${analysisId}`
+            : `/api/send-drive/single/${analysisId}`;
+        
+        const response = await axios.post(endpoint, { driveFolder: driveFolder || '' });
+        
+        hideLoading();
+        
+        if (response.data.success) {
+            showSuccess(response.data.message);
+        } else {
+            showError(response.data.error || '드라이브 전송 실패');
+        }
+    } catch (error) {
+        hideLoading();
+        console.error('드라이브 전송 오류:', error);
+        showError('드라이브 전송 실패: ' + (error.response?.data?.error || error.message));
+    }
+}
