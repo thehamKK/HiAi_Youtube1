@@ -59,13 +59,21 @@ async function getChannelFromVideoUrl(videoUrl: string, apiKey: string): Promise
   }
 }
 
-// 채널의 영상 목록 가져오기
-async function getChannelVideos(channelId: string, apiKey: string, maxResults: number = 10) {
+// 채널의 영상 목록 가져오기 (페이징 지원)
+async function getChannelVideos(
+  channelId: string, 
+  apiKey: string, 
+  maxResults: number = 10, 
+  pageToken?: string
+): Promise<{ videos: any[], nextPageToken?: string } | null> {
   try {
-    const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&maxResults=${maxResults}&order=date&type=video&key=${apiKey}`
-    )
+    let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&maxResults=${Math.min(maxResults, 50)}&order=date&type=video&key=${apiKey}`
     
+    if (pageToken) {
+      url += `&pageToken=${pageToken}`
+    }
+    
+    const response = await fetch(url)
     const data = await response.json()
     
     if (data.error) {
@@ -74,17 +82,100 @@ async function getChannelVideos(channelId: string, apiKey: string, maxResults: n
     }
     
     if (!data.items || data.items.length === 0) {
-      return []
+      return { videos: [], nextPageToken: undefined }
     }
     
-    return data.items.map((item: any) => ({
+    const videos = data.items.map((item: any) => ({
       videoId: item.id.videoId,
       title: item.snippet.title,
       url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
       publishedAt: item.snippet.publishedAt
     }))
+    
+    return {
+      videos,
+      nextPageToken: data.nextPageToken
+    }
   } catch (error) {
     console.error('채널 영상 목록 가져오기 실패:', error)
+    return null
+  }
+}
+
+// 채널 영상 목록 가져오기 (중복 제거 후 부족한 만큼 추가)
+async function getChannelVideosWithDuplicateRemoval(
+  channelId: string,
+  apiKey: string,
+  targetCount: number,
+  db: D1Database
+): Promise<any[] | null> {
+  try {
+    let allVideos: any[] = []
+    let pageToken: string | undefined = undefined
+    let attempts = 0
+    const maxAttempts = 5 // 최대 5페이지까지만 시도
+    
+    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개)`)
+    
+    while (allVideos.length < targetCount && attempts < maxAttempts) {
+      attempts++
+      
+      // YouTube API에서 영상 목록 가져오기 (페이지당 최대 50개)
+      const result = await getChannelVideos(channelId, apiKey, 50, pageToken)
+      
+      if (!result) {
+        console.error('YouTube API 호출 실패')
+        break
+      }
+      
+      const { videos, nextPageToken } = result
+      
+      if (videos.length === 0) {
+        console.log('더 이상 영상이 없습니다.')
+        break
+      }
+      
+      console.log(`📄 ${attempts}페이지: ${videos.length}개 영상 가져옴`)
+      
+      // 이미 분석된 영상 확인
+      const videoIds = videos.map((v: any) => v.videoId)
+      const placeholders = videoIds.map(() => '?').join(',')
+      
+      const existingAnalyses = await db.prepare(`
+        SELECT video_id FROM analyses WHERE video_id IN (${placeholders})
+      `).bind(...videoIds).all()
+      
+      const existingVideoIds = new Set(existingAnalyses.results.map((r: any) => r.video_id))
+      
+      // 중복 제거
+      const newVideos = videos.filter((v: any) => !existingVideoIds.has(v.videoId))
+      
+      console.log(`✅ 중복 제거: ${videos.length}개 중 ${newVideos.length}개 신규 (${videos.length - newVideos.length}개 중복)`)
+      
+      allVideos = allVideos.concat(newVideos)
+      
+      // 목표 개수 달성 시 중단
+      if (allVideos.length >= targetCount) {
+        allVideos = allVideos.slice(0, targetCount)
+        console.log(`🎯 목표 개수 달성: ${allVideos.length}개`)
+        break
+      }
+      
+      // 다음 페이지가 없으면 중단
+      if (!nextPageToken) {
+        console.log(`⚠️ 더 이상 페이지가 없습니다. (수집된 영상: ${allVideos.length}개)`)
+        break
+      }
+      
+      pageToken = nextPageToken
+    }
+    
+    console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개)`)
+    
+    return allVideos
+    
+  } catch (error) {
+    console.error('채널 영상 목록 가져오기 오류:', error)
     return null
   }
 }
@@ -502,33 +593,24 @@ app.post('/api/channel/analyze', async (c) => {
     
     const { channelId, channelName } = channelInfo
     
-    // 채널 영상 목록 가져오기
-    const videos = await getChannelVideos(channelId, env.YOUTUBE_API_KEY, maxVideos)
-    if (!videos) {
+    // 채널 영상 목록 가져오기 (중복 제거 후 부족한 만큼 추가)
+    const newVideos = await getChannelVideosWithDuplicateRemoval(
+      channelId, 
+      env.YOUTUBE_API_KEY, 
+      maxVideos,
+      env.DB
+    )
+    
+    if (!newVideos) {
       return c.json({ error: '채널 영상 목록을 가져올 수 없습니다.' }, 500)
     }
-    
-    if (videos.length === 0) {
-      return c.json({ error: '영상이 없습니다.' }, 404)
-    }
-    
-    // 이미 분석된 영상 필터링
-    const videoIds = videos.map((v: any) => v.videoId)
-    const placeholders = videoIds.map(() => '?').join(',')
-    
-    const existingAnalyses = await env.DB.prepare(`
-      SELECT video_id FROM analyses WHERE video_id IN (${placeholders})
-    `).bind(...videoIds).all()
-    
-    const existingVideoIds = new Set(existingAnalyses.results.map((r: any) => r.video_id))
-    const newVideos = videos.filter((v: any) => !existingVideoIds.has(v.videoId))
     
     if (newVideos.length === 0) {
       return c.json({
         success: false,
-        message: '모든 영상이 이미 분석되었습니다.',
-        totalVideos: videos.length,
-        alreadyAnalyzed: videos.length
+        message: '모든 영상이 이미 분석되었거나 채널에 영상이 없습니다.',
+        totalVideos: 0,
+        alreadyAnalyzed: 0
       })
     }
     
@@ -536,7 +618,7 @@ app.post('/api/channel/analyze', async (c) => {
     await env.DB.prepare(`
       INSERT OR IGNORE INTO channels (channel_id, channel_name, video_count)
       VALUES (?, ?, ?)
-    `).bind(channelId, channelName, videos.length).run()
+    `).bind(channelId, channelName, newVideos.length).run()
     
     // batch_jobs 생성
     const batchResult = await env.DB.prepare(`
