@@ -921,35 +921,54 @@ app.get('/', (c) => {
                     </div>
                 </div>
 
+                <!-- 채널 분석 성공 -->
+                <div id="channelSuccess" class="hidden mt-6">
+                    <div class="bg-green-50 border-l-4 border-green-500 p-4 rounded">
+                        <div class="flex items-center">
+                            <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                            <p class="text-green-700 font-semibold" id="channelSuccessMessage"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 채널 분석 로딩 -->
+                <div id="channelLoading" class="hidden mt-6">
+                    <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+                        <div class="flex items-center">
+                            <i class="fas fa-spinner fa-spin text-blue-500 mr-2"></i>
+                            <p class="text-blue-700 font-semibold" id="channelLoadingMessage">처리 중...</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 채널 분석 진행상황 -->
                 <div id="channelProgress" class="hidden mt-6">
                     <div class="bg-gray-50 rounded-lg p-6">
                         <h4 class="font-semibold text-gray-800 mb-3">진행 상황</h4>
                         <div class="space-y-2">
                             <div class="flex justify-between text-sm">
-                                <span id="channelName" class="text-gray-700"></span>
-                                <span id="progressText" class="font-semibold text-orange-600"></span>
+                                <span id="channelProgressText" class="font-semibold text-orange-600"></span>
                             </div>
                             <div class="w-full bg-gray-200 rounded-full h-4">
-                                <div id="progressBar" class="bg-gradient-to-r from-orange-500 to-red-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                <div id="channelProgressBar" class="bg-gradient-to-r from-orange-500 to-red-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
                             </div>
-                            <div id="currentVideo" class="text-xs text-gray-500 mt-2"></div>
+                            <div id="channelCurrentVideo" class="text-xs text-gray-500 mt-2"></div>
                         </div>
                     </div>
                 </div>
 
                 <!-- 채널 분석 결과 -->
                 <div id="channelResults" class="hidden mt-6">
-                    <div class="bg-green-50 border-l-4 border-green-500 p-4 rounded">
-                        <div class="flex items-center">
+                    <div class="bg-gradient-to-r from-green-50 to-blue-50 border-l-4 border-green-500 p-6 rounded-lg">
+                        <h4 class="font-semibold text-gray-800 mb-4 flex items-center">
                             <i class="fas fa-check-circle text-green-500 mr-2"></i>
-                            <p class="text-green-700 font-semibold" id="channelResultMessage"></p>
-                        </div>
+                            분석 완료
+                        </h4>
                         <button 
-                            onclick="downloadAllReports()" 
-                            class="mt-4 bg-green-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-green-700 transition-all"
+                            id="downloadAllReports"
+                            class="w-full bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:from-green-700 hover:to-blue-700 transition-all shadow-lg hover:shadow-xl"
                         >
-                            <i class="fas fa-download mr-2"></i>
+                            <i class="fas fa-file-archive mr-2"></i>
                             전체 보고서 ZIP 다운로드
                         </button>
                     </div>

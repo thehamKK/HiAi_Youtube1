@@ -648,6 +648,289 @@ function hideLoading() {
     document.getElementById('loading').classList.add('hidden');
 }
 
+// ==================== 채널 일괄 분석 ====================
+
+// 채널 분석 시작
+async function analyzeChannel() {
+    const channelUrl = document.getElementById('channelUrl').value.trim();
+    const maxVideos = parseInt(document.getElementById('maxVideos').value);
+    
+    if (!channelUrl) {
+        showChannelError('YouTube 채널 URL을 입력해주세요.');
+        return;
+    }
+    
+    hideChannelError();
+    hideChannelSuccess();
+    document.getElementById('channelProgress').classList.add('hidden');
+    document.getElementById('channelResults').classList.add('hidden');
+    
+    const analyzeChannelBtn = document.getElementById('analyzeChannelBtn');
+    analyzeChannelBtn.disabled = true;
+    analyzeChannelBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    
+    try {
+        // 1단계: 배치 작업 생성
+        showChannelLoading(`채널 영상 목록 가져오는 중... (최대 ${maxVideos}개)`);
+        
+        const response = await axios.post('/api/channel/analyze', {
+            videoUrl: channelUrl,
+            maxVideos
+        }, {
+            timeout: 30000  // 30초
+        });
+        
+        if (!response.data.success) {
+            showChannelError(response.data.error || '채널 분석을 시작할 수 없습니다.');
+            return;
+        }
+        
+        const { batchId, channelName, totalVideos, alreadyAnalyzed } = response.data;
+        currentBatch = { batchId, channelName, totalVideos };
+        
+        console.log('✅ 배치 작업 생성:', { batchId, channelName, totalVideos, alreadyAnalyzed });
+        
+        showChannelSuccess(
+            `채널: ${channelName}\n` +
+            `분석 대상: ${totalVideos}개 영상\n` +
+            (alreadyAnalyzed > 0 ? `이미 분석됨: ${alreadyAnalyzed}개\n` : '') +
+            `잠시 후 자동으로 분석이 시작됩니다...`
+        );
+        
+        // 2초 대기 후 자동 처리 시작
+        setTimeout(() => {
+            startBatchProcessing(batchId, totalVideos, channelName);
+        }, 2000);
+        
+    } catch (error) {
+        console.error('채널 분석 시작 오류:', error);
+        hideChannelLoading();
+        
+        if (error.response && error.response.data) {
+            showChannelError(error.response.data.error || '채널 분석을 시작할 수 없습니다.');
+        } else if (error.code === 'ECONNABORTED') {
+            showChannelError('채널 정보를 가져오는데 시간이 너무 오래 걸렸습니다.\n잠시 후 다시 시도해주세요.');
+        } else {
+            showChannelError('서버와 통신할 수 없습니다.\n잠시 후 다시 시도해주세요.');
+        }
+    } finally {
+        analyzeChannelBtn.disabled = false;
+        analyzeChannelBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+}
+
+// 배치 처리 시작
+async function startBatchProcessing(batchId, totalVideos, channelName) {
+    let completed = 0;
+    let failed = 0;
+    
+    hideChannelSuccess();
+    document.getElementById('channelProgress').classList.remove('hidden');
+    document.getElementById('channelProgressBar').style.width = '0%';
+    document.getElementById('channelProgressText').textContent = `0 / ${totalVideos} 완료`;
+    document.getElementById('channelCurrentVideo').textContent = '분석 시작 중...';
+    
+    try {
+        while (completed + failed < totalVideos) {
+            // 진행 상황 폴링
+            const statusResponse = await axios.get(`/api/channel/status/${batchId}`);
+            
+            if (!statusResponse.data.success) {
+                throw new Error('상태 확인 실패');
+            }
+            
+            const status = statusResponse.data.status;
+            completed = status.completed;
+            failed = status.failed;
+            
+            // 진행률 업데이트
+            const progress = Math.round(((completed + failed) / totalVideos) * 100);
+            document.getElementById('channelProgressBar').style.width = `${progress}%`;
+            document.getElementById('channelProgressText').textContent = 
+                `${completed + failed} / ${totalVideos} 완료 (성공: ${completed}, 실패: ${failed})`;
+            
+            // 현재 처리 중인 영상 표시
+            if (status.currentVideo) {
+                document.getElementById('channelCurrentVideo').textContent = 
+                    `현재 분석 중: ${status.currentVideo}`;
+            }
+            
+            // 완료 확인
+            if (status.batchStatus === 'completed') {
+                break;
+            }
+            
+            // 다음 영상 처리 요청 (논블로킹)
+            axios.post(`/api/channel/process/${batchId}`)
+                .catch(err => console.error('영상 처리 요청 오류:', err));
+            
+            // 폴링 간격
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+        
+        // 완료 메시지
+        hideChannelLoading();
+        document.getElementById('channelProgressBar').style.width = '100%';
+        document.getElementById('channelProgressText').textContent = 
+            `완료! (성공: ${completed}, 실패: ${failed})`;
+        document.getElementById('channelCurrentVideo').textContent = '모든 영상 분석 완료';
+        
+        showChannelSuccess(
+            `채널 "${channelName}" 분석 완료!\n` +
+            `성공: ${completed}개 / 실패: ${failed}개`
+        );
+        
+        // 결과 표시
+        displayChannelResults(batchId);
+        
+        // 히스토리 새로고침
+        loadHistory();
+        
+    } catch (error) {
+        console.error('배치 처리 오류:', error);
+        hideChannelLoading();
+        showChannelError('배치 처리 중 오류가 발생했습니다.\n' + (error.message || '알 수 없는 오류'));
+    }
+}
+
+// 채널 분석 결과 표시
+async function displayChannelResults(batchId) {
+    try {
+        const response = await axios.get(`/api/channel/status/${batchId}`);
+        
+        if (!response.data.success) {
+            showChannelError('분석 결과를 불러올 수 없습니다.');
+            return;
+        }
+        
+        const status = response.data.status;
+        const videos = status.videos || [];
+        
+        if (videos.length === 0) {
+            showChannelError('분석된 영상이 없습니다.');
+            return;
+        }
+        
+        document.getElementById('channelResults').classList.remove('hidden');
+        
+        // ZIP 다운로드 버튼 활성화
+        const downloadBtn = document.getElementById('downloadAllReports');
+        downloadBtn.onclick = () => downloadAllReports(batchId);
+        
+    } catch (error) {
+        console.error('결과 표시 오류:', error);
+        showChannelError('결과를 표시하는 중 오류가 발생했습니다.');
+    }
+}
+
+// 전체 보고서 ZIP 다운로드
+async function downloadAllReports(batchId) {
+    if (!currentBatch) {
+        showChannelError('배치 정보가 없습니다. 채널 분석을 먼저 실행해주세요.');
+        return;
+    }
+    
+    try {
+        showChannelLoading('보고서 ZIP 파일 생성 중...');
+        
+        // 배치 상태 가져오기
+        const statusResponse = await axios.get(`/api/channel/status/${batchId}`);
+        if (!statusResponse.data.success) {
+            throw new Error('배치 상태를 가져올 수 없습니다.');
+        }
+        
+        const videos = statusResponse.data.status.videos || [];
+        const completedVideos = videos.filter(v => v.status === 'completed' && v.analysis_id);
+        
+        if (completedVideos.length === 0) {
+            showChannelError('다운로드할 보고서가 없습니다.');
+            return;
+        }
+        
+        // ZIP 파일 생성
+        const zip = new JSZip();
+        
+        for (const video of completedVideos) {
+            try {
+                const analysisResponse = await axios.get(`/api/analysis/${video.analysis_id}`);
+                if (analysisResponse.data.success && analysisResponse.data.analysis) {
+                    const analysis = analysisResponse.data.analysis;
+                    
+                    // 파일명 생성
+                    const uploadDate = video.upload_date || 'Unknown';
+                    const title = video.video_title || video.video_id;
+                    const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+                    
+                    // 요약 보고서
+                    if (analysis.summary) {
+                        zip.file(`[${uploadDate}] ${safeTitle} - 요약보고서.txt`, analysis.summary);
+                    }
+                    
+                    // 대본
+                    if (analysis.transcript) {
+                        zip.file(`[${uploadDate}] ${safeTitle} - 대본.txt`, analysis.transcript);
+                    }
+                }
+            } catch (err) {
+                console.error(`영상 ${video.video_id} 처리 실패:`, err);
+            }
+        }
+        
+        // ZIP 다운로드
+        const content = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentBatch.channelName || 'channel'}_분석결과_${new Date().toISOString().split('T')[0]}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        hideChannelLoading();
+        showChannelSuccess(`ZIP 파일 다운로드 완료! (${completedVideos.length}개 영상)`);
+        
+    } catch (error) {
+        console.error('ZIP 생성 오류:', error);
+        hideChannelLoading();
+        showChannelError('ZIP 생성 중 오류가 발생했습니다.');
+    }
+}
+
+// 채널 에러/성공/로딩 메시지
+function showChannelError(message) {
+    const errorDiv = document.getElementById('channelError');
+    const errorMessage = document.getElementById('channelErrorMessage');
+    errorMessage.textContent = message;
+    errorDiv.classList.remove('hidden');
+}
+
+function hideChannelError() {
+    document.getElementById('channelError').classList.add('hidden');
+}
+
+function showChannelSuccess(message) {
+    const successDiv = document.getElementById('channelSuccess');
+    const successMessage = document.getElementById('channelSuccessMessage');
+    successMessage.textContent = message;
+    successDiv.classList.remove('hidden');
+}
+
+function hideChannelSuccess() {
+    document.getElementById('channelSuccess').classList.add('hidden');
+}
+
+function showChannelLoading(message = '처리 중...') {
+    const loadingDiv = document.getElementById('channelLoading');
+    const loadingMessage = document.getElementById('channelLoadingMessage');
+    loadingMessage.textContent = message;
+    loadingDiv.classList.remove('hidden');
+}
+
+function hideChannelLoading() {
+    document.getElementById('channelLoading').classList.add('hidden');
+}
+
 // ==================== 분석 히스토리 ====================
 
 // 히스토리 로드
