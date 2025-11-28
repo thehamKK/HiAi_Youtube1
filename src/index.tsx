@@ -513,27 +513,29 @@ app.post('/api/analyze/transcript', async (c) => {
       }, 400)
     }
     
-    // Gemini API로 대본 추출
-    const transcriptResult = await extractTranscriptWithGemini(videoUrl, env.GEMINI_API_KEY)
-    
-    let transcript: string
+    // YouTube 자막을 먼저 시도 (빠르고 안정적)
+    console.log('📝 1단계: 대본 추출 시작 (YouTube 자막 우선)')
+    let transcript: string | null = await extractTranscriptFromYouTube(videoId)
     let title: string | undefined
     let uploadDate: string | undefined
     
-    if (!transcriptResult) {
-      // Gemini 실패 시 YouTube 자막 API 폴백
-      const fallbackTranscript = await extractTranscriptFromYouTube(videoId)
-      if (!fallbackTranscript) {
+    if (transcript) {
+      console.log(`✅ YouTube 자막으로 대본 추출 성공: ${transcript.length}자`)
+    } else {
+      // YouTube 자막이 없으면 Gemini API 사용
+      console.log('⚠️ YouTube 자막 없음, Gemini API 시도...')
+      const transcriptResult = await extractTranscriptWithGemini(videoUrl, env.GEMINI_API_KEY)
+      
+      if (!transcriptResult) {
         return c.json({
           error: '대본 추출 실패',
-          details: 'Gemini API가 영상 분석 실패 (10분 타임아웃)\nYouTube 자막도 없음 (4단계 폴백 전부 실패)\n\n※ Gemini 2.5 Flash는 45분 이하 영상만 처리 가능합니다.\n영상 길이를 확인해주세요.'
+          details: 'YouTube 자막 없음\nGemini API도 실패 (과부하 또는 타임아웃)\n\n해결 방법:\n1. 자막이 있는 영상을 선택하거나\n2. 잠시 후 다시 시도해주세요 (Gemini API 과부하)\n3. 짧은 영상(10분 이하)을 먼저 시도해보세요'
         }, 500)
       }
-      transcript = fallbackTranscript
-    } else {
       transcript = transcriptResult.transcript
       title = transcriptResult.title
       uploadDate = transcriptResult.uploadDate
+      console.log(`✅ Gemini API로 대본 추출 성공: ${transcript.length}자`)
     }
     
     // 채널 정보 추출
