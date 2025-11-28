@@ -337,21 +337,35 @@ async function pollChannelProgress(batchId, totalVideos) {
             if (response.data.batch && response.data.progress) {
                 const { progress, videos } = response.data;
                 
-                // 진행률 업데이트
-                const percentage = progress.percentage || 0;
+                // 진행률 업데이트 (완료 + 실패)
+                const processedCount = progress.completed + progress.failed;
+                const percentage = Math.round((processedCount / progress.total) * 100);
                 document.getElementById('progressBar').style.width = `${percentage}%`;
-                document.getElementById('progressText').textContent = `${progress.completed} / ${progress.total}`;
+                document.getElementById('progressText').textContent = 
+                    `${processedCount} / ${progress.total} (성공: ${progress.completed}, 실패: ${progress.failed})`;
+                
+                // 영상별 상태 업데이트
+                videos.forEach(video => {
+                    updateVideoStatus(
+                        video.video_id, 
+                        video.status, 
+                        video.error_message || '', 
+                        0
+                    );
+                });
                 
                 // 현재 처리 중인 영상 표시
                 const processingVideo = videos.find(v => v.status === 'processing');
                 if (processingVideo) {
                     document.getElementById('currentVideo').textContent = `현재: ${processingVideo.video_title}`;
+                } else {
+                    document.getElementById('currentVideo').textContent = '대기 중...';
                 }
                 
-                // 완료 확인
-                if (progress.completed >= progress.total) {
+                // 완료 확인 (성공 + 실패 = 전체)
+                if (processedCount >= progress.total) {
                     clearInterval(pollInterval);
-                    showChannelComplete(batchId, progress.total);
+                    showChannelComplete(batchId, progress.completed, progress.failed, progress.total);
                 }
             }
         } catch (error) {
@@ -363,17 +377,29 @@ async function pollChannelProgress(batchId, totalVideos) {
 }
 
 // 채널 분석 완료
-function showChannelComplete(batchId, totalVideos) {
+function showChannelComplete(batchId, completedCount, failedCount, totalVideos) {
     document.getElementById('channelProgress').classList.add('hidden');
     document.getElementById('channelResults').classList.remove('hidden');
-    document.getElementById('channelResultMessage').textContent = 
-        `✅ ${totalVideos}개 영상 분석이 완료되었습니다!`;
+    
+    // 결과 메시지 (성공/실패 구분)
+    let resultMessage = '';
+    if (failedCount === 0) {
+        resultMessage = `✅ ${completedCount}개 영상 분석이 완료되었습니다!`;
+        showSuccess('채널 분석이 완료되었습니다! ZIP 다운로드 버튼을 클릭하세요.');
+    } else if (completedCount === 0) {
+        resultMessage = `❌ ${failedCount}개 영상 분석이 모두 실패했습니다.`;
+        showChannelError(`모든 영상 분석 실패: 대본 추출이 실패했습니다. Gemini API 키를 확인해주세요.`);
+    } else {
+        resultMessage = `⚠️ ${completedCount}개 성공, ${failedCount}개 실패 (총 ${totalVideos}개)`;
+        showSuccess(`일부 분석 완료: ${completedCount}개 성공, ${failedCount}개 실패`);
+    }
+    
+    document.getElementById('channelResultMessage').textContent = resultMessage;
     
     const channelBtn = document.getElementById('analyzeChannelBtn');
     channelBtn.disabled = false;
     channelBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     
-    showSuccess('채널 분석이 완료되었습니다! ZIP 다운로드 버튼을 클릭하세요.');
     loadHistory();  // 히스토리 새로고침
 }
 
