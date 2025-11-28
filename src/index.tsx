@@ -320,7 +320,7 @@ async function processVideoAnalysis(
     // 시작 시간 기록
     await db.prepare(`
       UPDATE batch_videos 
-      SET status = 'processing', started_at = CURRENT_TIMESTAMP 
+      SET status = 'processing', started_at = CURRENT_TIMESTAMP, current_step = '대본 추출 중...'
       WHERE id = ?
     `).bind(batchVideoId).run()
     
@@ -367,10 +367,22 @@ async function processVideoAnalysis(
     
     // 65초 대기 (Rate Limit 방지)
     console.log('⏳ 65초 대기 중... (Rate Limit 방지)')
+    await db.prepare(`
+      UPDATE batch_videos 
+      SET current_step = 'Rate Limit 방지 대기 중... (65초)'
+      WHERE id = ?
+    `).bind(batchVideoId).run()
+    
     await new Promise(resolve => setTimeout(resolve, 65000))
     
     // 2단계: 보고서 생성
     console.log('📊 2단계 시작: AI 요약 보고서 생성')
+    await db.prepare(`
+      UPDATE batch_videos 
+      SET current_step = 'AI 보고서 생성 중...'
+      WHERE id = ?
+    `).bind(batchVideoId).run()
+    
     const summary = await generateSummaryWithGemini(
       transcriptResult.transcript,
       geminiApiKey,
@@ -393,7 +405,7 @@ async function processVideoAnalysis(
     // batch_videos 완료 처리
     await db.prepare(`
       UPDATE batch_videos 
-      SET status = 'completed', finished_at = CURRENT_TIMESTAMP 
+      SET status = 'completed', finished_at = CURRENT_TIMESTAMP, current_step = '완료'
       WHERE id = ?
     `).bind(batchVideoId).run()
     

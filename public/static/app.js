@@ -346,10 +346,15 @@ async function pollChannelProgress(batchId, totalVideos) {
                 
                 // 영상별 상태 업데이트
                 videos.forEach(video => {
+                    // 현재 단계 표시 (processing 상태일 때)
+                    const statusText = video.status === 'processing' 
+                        ? (video.current_step || '처리 중...')
+                        : (video.error_message || '');
+                    
                     updateVideoStatus(
                         video.video_id, 
                         video.status, 
-                        video.error_message || '', 
+                        statusText, 
                         0
                     );
                 });
