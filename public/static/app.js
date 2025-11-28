@@ -535,18 +535,24 @@ function toggleFolder(folderId) {
 
 async function loadHistory() {
     try {
+        console.log('🔄 히스토리 로드 시작...');
         const response = await axios.get('/api/history');
+        console.log('✅ 히스토리 API 응답:', response.data);
+        console.log('📊 단일 분석:', response.data.single?.length || 0, '개');
+        console.log('📊 배치 분석:', response.data.batch?.length || 0, '개');
         
         // 단일 분석 표시
         const singleList = document.getElementById('singleAnalysisList');
         const singleCount = document.getElementById('singleAnalysisCount');
         
         if (response.data.single && response.data.single.length > 0) {
+            console.log('✅ 단일 분석 렌더링 중...');
             singleCount.textContent = response.data.single.length;
             singleList.innerHTML = response.data.single.map(analysis => 
                 createHistoryItem(analysis, 'single')
             ).join('');
         } else {
+            console.log('⚠️  단일 분석 데이터 없음');
             singleCount.textContent = '0';
             singleList.innerHTML = '<p class="text-gray-500 text-sm">분석 히스토리가 없습니다.</p>';
         }
@@ -782,3 +788,9 @@ function hideLoading() {
 // ==================== 채널 일괄 분석 ====================
 
 // 채널 분석 시작
+
+// ==================== 페이지 로드 시 실행 ====================
+window.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 페이지 로드 완료');
+    loadHistory();
+});

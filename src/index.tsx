@@ -1328,4 +1328,9 @@ app.get('/', (c) => {
   `)
 })
 
+// Favicon 라우트 (404 대신 204 No Content 반환)
+app.get('/favicon.ico', (c) => {
+  return c.body(null, 204)
+})
+
 export default app
