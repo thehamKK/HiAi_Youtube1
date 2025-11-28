@@ -517,68 +517,124 @@ function formatDateForFilename(date) {
 
 // ==================== 히스토리 ====================
 
+// 폴더 토글 함수
+function toggleFolder(folderId) {
+    const content = document.getElementById(folderId + 'Content');
+    const icon = document.getElementById(folderId + 'Icon');
+    
+    if (content.classList.contains('hidden')) {
+        content.classList.remove('hidden');
+        icon.classList.remove('fa-folder');
+        icon.classList.add('fa-folder-open');
+    } else {
+        content.classList.add('hidden');
+        icon.classList.remove('fa-folder-open');
+        icon.classList.add('fa-folder');
+    }
+}
+
 async function loadHistory() {
     try {
         const response = await axios.get('/api/history');
         
-        if (response.data.analyses && response.data.analyses.length > 0) {
-            displayHistory(response.data.analyses);
+        // 단일 분석 표시
+        const singleList = document.getElementById('singleAnalysisList');
+        const singleCount = document.getElementById('singleAnalysisCount');
+        
+        if (response.data.single && response.data.single.length > 0) {
+            singleCount.textContent = response.data.single.length;
+            singleList.innerHTML = response.data.single.map(analysis => 
+                createHistoryItem(analysis, 'single')
+            ).join('');
         } else {
-            document.getElementById('history').innerHTML = 
-                '<p class="text-gray-500">분석 히스토리가 없습니다.</p>';
+            singleCount.textContent = '0';
+            singleList.innerHTML = '<p class="text-gray-500 text-sm">분석 히스토리가 없습니다.</p>';
         }
+        
+        // 배치 분석 표시
+        const batchList = document.getElementById('batchAnalysisList');
+        const batchCount = document.getElementById('batchAnalysisCount');
+        
+        if (response.data.batch && response.data.batch.length > 0) {
+            batchCount.textContent = response.data.batch.length;
+            batchList.innerHTML = response.data.batch.map(analysis => 
+                createHistoryItem(analysis, 'batch')
+            ).join('');
+        } else {
+            batchCount.textContent = '0';
+            batchList.innerHTML = '<p class="text-gray-500 text-sm">분석 히스토리가 없습니다.</p>';
+        }
+        
     } catch (error) {
-        console.error('히스토리 로드 오류:', error);
-        document.getElementById('history').innerHTML = 
-            '<p class="text-red-500">히스토리를 불러올 수 없습니다.</p>';
+        console.error('히스토리 로드 실패:', error);
+        document.getElementById('singleAnalysisList').innerHTML = 
+            '<p class="text-red-500 text-sm">히스토리를 불러올 수 없습니다.</p>';
+        document.getElementById('batchAnalysisList').innerHTML = 
+            '<p class="text-red-500 text-sm">히스토리를 불러올 수 없습니다.</p>';
     }
 }
 
-function displayHistory(analyses) {
-    const historyDiv = document.getElementById('history');
+function createHistoryItem(analysis, source) {
+    const date = new Date(analysis.created_at).toLocaleString('ko-KR');
+    const statusBadge = analysis.status === 'completed' ? 
+        '<span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-semibold">완료</span>' :
+        '<span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs font-semibold">대본만</span>';
     
-    let html = '<div class="space-y-4">';
+    const sourceBadge = source === 'single' ?
+        '<span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-semibold">단일</span>' :
+        '<span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-semibold">배치</span>';
     
-    for (const analysis of analyses) {
-        const date = new Date(analysis.created_at).toLocaleString('ko-KR');
-        const statusBadge = analysis.status === 'completed' ? 
-            '<span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">완료</span>' :
-            '<span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs">대본만</span>';
-        
-        html += `
-            <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                <div class="flex justify-between items-start mb-2">
-                    <div class="flex-1">
-                        <h4 class="font-semibold text-gray-800">${analysis.title || analysis.video_id}</h4>
-                        <p class="text-sm text-gray-500">ID: ${analysis.id} | ${date}</p>
-                        ${analysis.channel_name ? `<p class="text-sm text-gray-600">채널: ${analysis.channel_name}</p>` : ''}
-                    </div>
-                    <div class="flex items-center space-x-2">
-                        ${statusBadge}
-                    </div>
+    return `
+        <div class="border border-gray-200 rounded-lg p-3 hover:shadow-md transition-shadow bg-white">
+            <div class="flex justify-between items-start mb-2">
+                <div class="flex-1">
+                    <h4 class="font-semibold text-gray-800 text-sm">${analysis.title || analysis.video_id}</h4>
+                    <p class="text-xs text-gray-500">ID: ${analysis.id} | ${date}</p>
+                    ${analysis.channel_name ? `<p class="text-xs text-gray-600">채널: ${analysis.channel_name}</p>` : ''}
                 </div>
-                <div class="flex space-x-2 mt-3">
-                    <button 
-                        onclick="viewAnalysis(${analysis.id})" 
-                        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 text-sm"
-                    >
-                        <i class="fas fa-eye mr-1"></i>보기
-                    </button>
-                    <a 
-                        href="${analysis.url}" 
-                        target="_blank" 
-                        class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 text-sm inline-block"
-                    >
-                        <i class="fab fa-youtube mr-1"></i>YouTube
-                    </a>
+                <div class="flex items-center space-x-1">
+                    ${sourceBadge}
+                    ${statusBadge}
                 </div>
             </div>
-        `;
-    }
-    
-    html += '</div>';
-    historyDiv.innerHTML = html;
+            <div class="flex space-x-2 mt-3">
+                <button 
+                    onclick="viewAnalysis(${analysis.id})" 
+                    class="flex-1 bg-blue-500 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-600 transition-colors"
+                >
+                    <i class="fas fa-eye mr-1"></i>
+                    결과 보기
+                </button>
+                <a 
+                    href="${analysis.url}" 
+                    target="_blank" 
+                    class="flex-1 bg-red-500 text-white px-3 py-1.5 rounded text-xs hover:bg-red-600 transition-colors text-center"
+                >
+                    <i class="fab fa-youtube mr-1"></i>
+                    YouTube
+                </a>
+                ${analysis.status === 'completed' ? `
+                    <button 
+                        onclick="downloadReport(${analysis.id})" 
+                        class="flex-1 bg-green-500 text-white px-3 py-1.5 rounded text-xs hover:bg-green-600 transition-colors"
+                    >
+                        <i class="fas fa-download mr-1"></i>
+                        보고서
+                    </button>
+                ` : ''}
+                <button 
+                    onclick="downloadTranscript(${analysis.id}, '${analysis.video_id}')" 
+                    class="flex-1 bg-gray-500 text-white px-3 py-1.5 rounded text-xs hover:bg-gray-600 transition-colors"
+                >
+                    <i class="fas fa-file-alt mr-1"></i>
+                    대본
+                </button>
+            </div>
+        </div>
+    `;
 }
+
+// displayHistory 함수 제거됨 - createHistoryItem으로 대체
 
 async function viewAnalysis(id) {
     try {
@@ -1123,104 +1179,6 @@ async function loadHistory() {
 }
 
 // 히스토리 표시
-function displayHistory(analyses) {
-    const historyDiv = document.getElementById('history');
-    
-    if (!analyses || analyses.length === 0) {
-        historyDiv.innerHTML = `
-            <div class="text-center text-gray-500 py-8">
-                <i class="fas fa-inbox text-4xl mb-4"></i>
-                <p>아직 분석된 영상이 없습니다.</p>
-            </div>
-        `;
-        return;
-    }
-    
-    historyDiv.innerHTML = analyses.map(item => `
-        <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-orange-500 transition-colors">
-            <div class="flex justify-between items-start mb-2">
-                <div class="flex-1">
-                    <h3 class="font-bold text-lg text-gray-800 mb-1">
-                        ${item.title || '제목 없음'}
-                    </h3>
-                    <p class="text-sm text-gray-500 mb-2">
-                        <i class="fas fa-link mr-1"></i>
-                        <a href="${item.url}" target="_blank" class="text-blue-600 hover:underline">
-                            ${item.video_id}
-                        </a>
-                    </p>
-                    ${item.channel_name ? `
-                        <p class="text-sm text-gray-500 mb-2">
-                            <i class="fas fa-tv mr-1"></i>
-                            채널: ${item.channel_name}
-                        </p>
-                    ` : ''}
-                    <p class="text-xs text-gray-400">
-                        <i class="fas fa-clock mr-1"></i>
-                        분석일: ${new Date(item.created_at).toLocaleString('ko-KR')}
-                    </p>
-                </div>
-                <div class="ml-4">
-                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${
-                        item.status === 'completed' 
-                            ? 'bg-green-100 text-green-800' 
-                            : item.status === 'transcript_only'
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-gray-100 text-gray-800'
-                    }">
-                        ${
-                            item.status === 'completed' 
-                                ? '✓ 완료' 
-                                : item.status === 'transcript_only'
-                                ? '대본만'
-                                : item.status
-                        }
-                    </span>
-                </div>
-            </div>
-            
-            <div class="mt-4 flex space-x-2">
-                ${item.status === 'completed' ? `
-                    <button 
-                        onclick="viewAnalysis('${item.id}')" 
-                        class="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors text-sm font-semibold"
-                    >
-                        <i class="fas fa-eye mr-1"></i>
-                        보고서 보기
-                    </button>
-                    <button 
-                        onclick="downloadHistoryReport('${item.id}', '${item.video_id}', '${(item.title || '').replace(/'/g, "\\'")}', '${item.upload_date || ''}')" 
-                        class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold"
-                    >
-                        <i class="fas fa-download mr-1"></i>
-                        보고서 다운로드
-                    </button>
-                ` : ''}
-                <button 
-                    onclick="downloadHistoryTranscript('${item.id}', '${item.video_id}', '${(item.title || '').replace(/'/g, "\\'")}', '${item.upload_date || ''}')" 
-                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
-                >
-                    <i class="fas fa-download mr-1"></i>
-                    대본 다운로드
-                </button>
-            </div>
-        </div>
-    `).join('');
-}
-
-// 히스토리에서 분석 보기
-async function viewAnalysis(analysisId) {
-    try {
-        const response = await axios.get(`/api/analysis/${analysisId}`);
-        
-        if (!response.data.success) {
-            showError('분석 결과를 불러올 수 없습니다.');
-            return;
-        }
-        
-        const analysis = response.data.analysis;
-        
-        // 현재 분석 설정
         currentAnalysis = {
             analysisId: analysis.id,
             videoId: analysis.video_id,

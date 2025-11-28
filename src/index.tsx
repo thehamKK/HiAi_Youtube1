@@ -379,10 +379,10 @@ async function processVideoAnalysis(
     
     console.log(`✅ 대본 추출 완료 (${transcriptResult.transcript.length}자)`)
     
-    // 분석 결과를 analyses 테이블에 저장 (transcript_only 상태)
+    // 분석 결과를 analyses 테이블에 저장 (transcript_only 상태, source='batch')
     const insertResult = await db.prepare(`
-      INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', CURRENT_TIMESTAMP)
+      INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', 'batch', CURRENT_TIMESTAMP)
     `).bind(
       videoId,
       videoUrl,
@@ -548,10 +548,10 @@ app.post('/api/analyze/transcript', async (c) => {
       }
     }
     
-    // DB에 저장 (transcript_only 상태)
+    // DB에 저장 (transcript_only 상태, source='single')
     const result = await env.DB.prepare(`
-      INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', CURRENT_TIMESTAMP)
+      INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', 'single', CURRENT_TIMESTAMP)
     `).bind(videoId, videoUrl, transcript, title || null, uploadDate || null, channelId || null, channelName || null).run()
     
     const analysisId = result.meta.last_row_id
@@ -911,12 +911,22 @@ app.get('/api/history', async (c) => {
   }
   
   try {
-    const result = await env.DB.prepare(`
-      SELECT * FROM analyses ORDER BY created_at DESC LIMIT 100
+    // source별로 분리해서 조회
+    const singleResult = await env.DB.prepare(`
+      SELECT * FROM analyses WHERE source = 'single' OR source IS NULL ORDER BY created_at DESC LIMIT 100
+    `).all()
+    
+    const batchResult = await env.DB.prepare(`
+      SELECT * FROM analyses WHERE source = 'batch' ORDER BY created_at DESC LIMIT 100
     `).all()
     
     return c.json({
-      analyses: result.results
+      single: singleResult.results,
+      batch: batchResult.results,
+      // 하위 호환성을 위해 전체 목록도 반환
+      analyses: [...singleResult.results, ...batchResult.results].sort((a: any, b: any) => {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
     })
   } catch (error: any) {
     return c.json({
@@ -1243,7 +1253,7 @@ app.get('/', (c) => {
                 </div>
             </div>
 
-            <!-- 분석 히스토리 -->
+            <!-- 분석 히스토리 (폴더형 구조) -->
             <div class="bg-white rounded-2xl shadow-xl p-8 mt-8">
                 <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
                     <i class="fas fa-history mr-3 text-gray-600"></i>
@@ -1256,7 +1266,55 @@ app.get('/', (c) => {
                     <i class="fas fa-refresh mr-2"></i>
                     새로고침
                 </button>
-                <div id="history" class="space-y-4"></div>
+                
+                <!-- 폴더 구조 -->
+                <div class="space-y-6">
+                    <!-- 단일 영상 분석 폴더 -->
+                    <div class="border-2 border-gray-200 rounded-lg">
+                        <button 
+                            onclick="toggleFolder('singleAnalysis')" 
+                            class="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                        >
+                            <div class="flex items-center">
+                                <i id="singleAnalysisIcon" class="fas fa-folder text-blue-500 mr-3 text-xl"></i>
+                                <div class="text-left">
+                                    <h3 class="font-bold text-gray-800">단일 영상 분석</h3>
+                                    <p class="text-sm text-gray-500">프론트엔드에서 시작한 분석 (개별 영상)</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-4">
+                                <span id="singleAnalysisCount" class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-semibold">0</span>
+                                <i class="fas fa-chevron-down text-gray-400"></i>
+                            </div>
+                        </button>
+                        <div id="singleAnalysisContent" class="hidden border-t-2 border-gray-200 p-4 bg-gray-50">
+                            <div id="singleAnalysisList" class="space-y-3"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- 채널 일괄 분석 폴더 -->
+                    <div class="border-2 border-gray-200 rounded-lg">
+                        <button 
+                            onclick="toggleFolder('batchAnalysis')" 
+                            class="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                        >
+                            <div class="flex items-center">
+                                <i id="batchAnalysisIcon" class="fas fa-folder text-green-500 mr-3 text-xl"></i>
+                                <div class="text-left">
+                                    <h3 class="font-bold text-gray-800">채널 일괄 분석</h3>
+                                    <p class="text-sm text-gray-500">백엔드에서 자동 처리된 분석 (배치 작업)</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-4">
+                                <span id="batchAnalysisCount" class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-semibold">0</span>
+                                <i class="fas fa-chevron-down text-gray-400"></i>
+                            </div>
+                        </button>
+                        <div id="batchAnalysisContent" class="hidden border-t-2 border-gray-200 p-4 bg-gray-50">
+                            <div id="batchAnalysisList" class="space-y-3"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
