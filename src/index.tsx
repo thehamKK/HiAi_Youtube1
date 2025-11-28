@@ -115,7 +115,7 @@ async function getChannelVideosWithDuplicateRemoval(
     let attempts = 0
     const maxAttempts = 5 // 최대 5페이지까지만 시도
     
-    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개)`)
+    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개, Shorts 제외)`)
     
     while (allVideos.length < targetCount && attempts < maxAttempts) {
       attempts++
@@ -137,8 +137,32 @@ async function getChannelVideosWithDuplicateRemoval(
       
       console.log(`📄 ${attempts}페이지: ${videos.length}개 영상 가져옴`)
       
+      // Shorts 영상 필터링 (제목에 'shorts', 'short', '#shorts' 포함된 영상 제외)
+      const filteredVideos = videos.filter((v: any) => {
+        const title = v.title.toLowerCase()
+        const isShorts = title.includes('shorts') || 
+                        title.includes('short') || 
+                        title.includes('#shorts') ||
+                        title.includes('#short')
+        return !isShorts
+      })
+      
+      const shortsCount = videos.length - filteredVideos.length
+      if (shortsCount > 0) {
+        console.log(`🚫 Shorts 제외: ${shortsCount}개 (${videos.length}개 → ${filteredVideos.length}개)`)
+      }
+      
       // 이미 분석된 영상 확인
-      const videoIds = videos.map((v: any) => v.videoId)
+      if (filteredVideos.length === 0) {
+        console.log('⚠️ Shorts 필터링 후 남은 영상이 없습니다.')
+        if (!nextPageToken) {
+          break
+        }
+        pageToken = nextPageToken
+        continue
+      }
+      
+      const videoIds = filteredVideos.map((v: any) => v.videoId)
       const placeholders = videoIds.map(() => '?').join(',')
       
       const existingAnalyses = await db.prepare(`
@@ -148,9 +172,9 @@ async function getChannelVideosWithDuplicateRemoval(
       const existingVideoIds = new Set(existingAnalyses.results.map((r: any) => r.video_id))
       
       // 중복 제거
-      const newVideos = videos.filter((v: any) => !existingVideoIds.has(v.videoId))
+      const newVideos = filteredVideos.filter((v: any) => !existingVideoIds.has(v.videoId))
       
-      console.log(`✅ 중복 제거: ${videos.length}개 중 ${newVideos.length}개 신규 (${videos.length - newVideos.length}개 중복)`)
+      console.log(`✅ 중복 제거: ${filteredVideos.length}개 중 ${newVideos.length}개 신규 (${filteredVideos.length - newVideos.length}개 중복)`)
       
       allVideos = allVideos.concat(newVideos)
       
@@ -170,7 +194,7 @@ async function getChannelVideosWithDuplicateRemoval(
       pageToken = nextPageToken
     }
     
-    console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개)`)
+    console.log(`📊 최종 결과: ${allVideos.length}개 영상 (목표: ${targetCount}개, Shorts 제외)`)
     
     return allVideos
     
