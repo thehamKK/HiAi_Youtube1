@@ -770,11 +770,7 @@ async function startBatchProcessing(batchId, totalVideos, channelName) {
                 break;
             }
             
-            // 다음 영상 처리 요청 (논블로킹)
-            axios.post(`/api/channel/process/${batchId}`)
-                .catch(err => console.error('영상 처리 요청 오류:', err));
-            
-            // 폴링 간격
+            // 폴링 간격 (3초)
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
         

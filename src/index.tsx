@@ -558,6 +558,40 @@ app.post('/api/channel/analyze', async (c) => {
     
     console.log(`✅ 배치 작업 생성 완료: ${newVideos.length}개 영상`)
     
+    // 백그라운드에서 자동 처리 시작 (비동기, 응답을 기다리지 않음)
+    c.executionCtx.waitUntil(
+      (async () => {
+        for (const video of newVideos) {
+          try {
+            const videoData = await env.DB.prepare(`
+              SELECT * FROM batch_videos WHERE batch_id = ? AND video_id = ?
+            `).bind(batchId, video.videoId).first()
+            
+            if (videoData && videoData.status === 'pending') {
+              await processVideoAnalysis(
+                env.DB,
+                videoData.id as number,
+                videoData.video_url as string,
+                videoData.video_id as string,
+                videoData.video_title as string,
+                channelId,
+                channelName,
+                videoData.upload_date as string | null,
+                env.GEMINI_API_KEY
+              )
+            }
+          } catch (error) {
+            console.error(`영상 ${video.videoId} 자동 처리 오류:`, error)
+          }
+        }
+        
+        // 모든 영상 처리 완료 후 배치 완료 처리
+        await env.DB.prepare(`
+          UPDATE batch_jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(batchId).run()
+      })()
+    )
+    
     return c.json({
       success: true,
       batchId,
