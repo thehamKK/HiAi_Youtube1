@@ -1321,16 +1321,36 @@ app.get('/api/history', async (c) => {
   }
   
   try {
-    // source별로 분리해서 조회
+    // 전체 통계 먼저 조회
+    const statsResult = await env.DB.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN source = 'single' OR source IS NULL THEN 1 ELSE 0 END) as single_count,
+        SUM(CASE WHEN source = 'batch' THEN 1 ELSE 0 END) as batch_count,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+        SUM(CASE WHEN status = 'transcript_only' THEN 1 ELSE 0 END) as transcript_only_count
+      FROM analyses
+    `).first()
+    
+    // source별로 분리해서 조회 (LIMIT 1000으로 증가)
     const singleResult = await env.DB.prepare(`
-      SELECT * FROM analyses WHERE source = 'single' OR source IS NULL ORDER BY created_at DESC LIMIT 100
+      SELECT * FROM analyses WHERE source = 'single' OR source IS NULL ORDER BY created_at DESC LIMIT 1000
     `).all()
     
     const batchResult = await env.DB.prepare(`
-      SELECT * FROM analyses WHERE source = 'batch' ORDER BY created_at DESC LIMIT 100
+      SELECT * FROM analyses WHERE source = 'batch' ORDER BY created_at DESC LIMIT 1000
     `).all()
     
     return c.json({
+      stats: statsResult || {
+        total: 0,
+        single_count: 0,
+        batch_count: 0,
+        completed_count: 0,
+        failed_count: 0,
+        transcript_only_count: 0
+      },
       single: singleResult.results,
       batch: batchResult.results,
       // 하위 호환성을 위해 전체 목록도 반환
@@ -1669,6 +1689,35 @@ app.get('/', (c) => {
                     <i class="fas fa-history mr-3 text-gray-600"></i>
                     분석 히스토리
                 </h2>
+                
+                <!-- 통계 표시 -->
+                <div id="historyStats" class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+                    <div class="bg-blue-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-blue-600" id="statTotal">0</div>
+                        <div class="text-sm text-gray-600">전체</div>
+                    </div>
+                    <div class="bg-green-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-green-600" id="statCompleted">0</div>
+                        <div class="text-sm text-gray-600">완료</div>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-purple-600" id="statSingle">0</div>
+                        <div class="text-sm text-gray-600">단일</div>
+                    </div>
+                    <div class="bg-orange-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-orange-600" id="statBatch">0</div>
+                        <div class="text-sm text-gray-600">배치</div>
+                    </div>
+                    <div class="bg-yellow-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-yellow-600" id="statTranscript">0</div>
+                        <div class="text-sm text-gray-600">대본만</div>
+                    </div>
+                    <div class="bg-red-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-red-600" id="statFailed">0</div>
+                        <div class="text-sm text-gray-600">실패</div>
+                    </div>
+                </div>
+                
                 <div class="flex space-x-4 mb-4">
                     <button 
                         onclick="loadHistory()" 

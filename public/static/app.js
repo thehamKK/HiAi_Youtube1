@@ -585,6 +585,17 @@ async function loadHistory() {
         console.log('📊 단일 분석:', response.data.single?.length || 0, '개');
         console.log('📊 배치 분석:', response.data.batch?.length || 0, '개');
         
+        // 통계 업데이트
+        if (response.data.stats) {
+            document.getElementById('statTotal').textContent = response.data.stats.total || 0;
+            document.getElementById('statCompleted').textContent = response.data.stats.completed_count || 0;
+            document.getElementById('statSingle').textContent = response.data.stats.single_count || 0;
+            document.getElementById('statBatch').textContent = response.data.stats.batch_count || 0;
+            document.getElementById('statTranscript').textContent = response.data.stats.transcript_only_count || 0;
+            document.getElementById('statFailed').textContent = response.data.stats.failed_count || 0;
+            console.log('📈 통계 업데이트 완료:', response.data.stats);
+        }
+        
         // 단일 분석 표시
         const singleList = document.getElementById('singleAnalysisList');
         const singleCount = document.getElementById('singleAnalysisCount');
