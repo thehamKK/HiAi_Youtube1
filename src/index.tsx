@@ -1190,6 +1190,128 @@ app.get('/api/channel/status/:batchId', async (c) => {
   }
 })
 
+// 완료된 분석 파일 일괄 다운로드 (텍스트 형식)
+app.get('/api/export/all-analyses', async (c) => {
+  const { env } = c
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    const result = await env.DB.prepare(`
+      SELECT 
+        id,
+        title,
+        video_id,
+        upload_date,
+        transcript,
+        summary,
+        created_at
+      FROM analyses 
+      WHERE status = 'completed' 
+        AND summary IS NOT NULL 
+        AND summary != ''
+      ORDER BY created_at DESC
+      LIMIT 200
+    `).all()
+    
+    if (!result.results || result.results.length === 0) {
+      return c.text('완료된 분석이 없습니다', 404)
+    }
+    
+    // 모든 분석을 하나의 텍스트 파일로 결합
+    let output = '='.repeat(80) + '\n'
+    output += '완료된 분석 파일 모음 (' + result.results.length + '개)\n'
+    output += '생성일: ' + new Date().toISOString() + '\n'
+    output += '='.repeat(80) + '\n\n'
+    
+    for (const analysis of result.results) {
+      const uploadDate = analysis.upload_date?.replace(/-/g, '') || ''
+      const videoId = analysis.video_id || ''
+      const title = analysis.title || 'Untitled'
+      
+      output += '\n' + '='.repeat(80) + '\n'
+      output += `ID: ${analysis.id} | ${uploadDate} | ${title}\n`
+      output += `비디오 ID: ${videoId} | https://youtube.com/watch?v=${videoId}\n`
+      output += '='.repeat(80) + '\n\n'
+      
+      output += '【요약보고서】\n\n'
+      output += analysis.summary + '\n\n'
+      
+      output += '-'.repeat(80) + '\n\n'
+      output += '【대본전문】\n\n'
+      output += analysis.transcript + '\n\n'
+    }
+    
+    // 다운로드 히스토리 기록
+    try {
+      const fileSizeBytes = new TextEncoder().encode(output).length
+      const userAgent = c.req.header('user-agent') || 'Unknown'
+      const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown'
+      
+      await env.DB.prepare(`
+        INSERT INTO export_history (export_type, file_format, total_analyses, file_size_bytes, ip_address, user_agent)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind('all', 'txt', result.results.length, fileSizeBytes, ipAddress, userAgent).run()
+    } catch (historyError) {
+      console.error('다운로드 히스토리 기록 실패:', historyError)
+      // 히스토리 기록 실패해도 다운로드는 계속 진행
+    }
+    
+    return new Response(output, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="completed_analyses_${result.results.length}files_${new Date().toISOString().split('T')[0]}.txt"`
+      }
+    })
+  } catch (error) {
+    console.error('Export error:', error)
+    return c.json({ error: '내보내기 실패: ' + error.message }, 500)
+  }
+})
+
+// 다운로드 통계 조회
+app.get('/api/export/stats', async (c) => {
+  const { env } = c
+  
+  if (!env.DB) {
+    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
+  }
+  
+  try {
+    // 총 다운로드 횟수
+    const totalResult = await env.DB.prepare(`
+      SELECT COUNT(*) as total FROM export_history
+    `).first()
+    
+    // 오늘 다운로드 횟수
+    const todayResult = await env.DB.prepare(`
+      SELECT COUNT(*) as today FROM export_history
+      WHERE DATE(exported_at) = DATE('now')
+    `).first()
+    
+    // 최근 다운로드 목록
+    const recentResult = await env.DB.prepare(`
+      SELECT * FROM export_history
+      ORDER BY exported_at DESC
+      LIMIT 10
+    `).all()
+    
+    return c.json({
+      success: true,
+      stats: {
+        total: totalResult?.total || 0,
+        today: todayResult?.today || 0,
+        recent: recentResult.results || []
+      }
+    })
+  } catch (error) {
+    console.error('다운로드 통계 조회 실패:', error)
+    return c.json({ error: '통계 조회 실패: ' + error.message }, 500)
+  }
+})
+
 // 분석 히스토리 조회
 app.get('/api/history', async (c) => {
   const { env } = c
@@ -1547,13 +1669,22 @@ app.get('/', (c) => {
                     <i class="fas fa-history mr-3 text-gray-600"></i>
                     분석 히스토리
                 </h2>
-                <button 
-                    onclick="loadHistory()" 
-                    class="bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-gray-700 transition-all mb-4"
-                >
-                    <i class="fas fa-refresh mr-2"></i>
-                    새로고침
-                </button>
+                <div class="flex space-x-4 mb-4">
+                    <button 
+                        onclick="loadHistory()" 
+                        class="bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-gray-700 transition-all"
+                    >
+                        <i class="fas fa-refresh mr-2"></i>
+                        새로고침
+                    </button>
+                    <button 
+                        onclick="exportAllAnalyses()" 
+                        class="bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold py-2 px-6 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl"
+                    >
+                        <i class="fas fa-download mr-2"></i>
+                        완료된 분석 전체 다운로드 (TXT)
+                    </button>
+                </div>
                 
                 <!-- 폴더 구조 -->
                 <div class="space-y-6">

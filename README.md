@@ -33,6 +33,13 @@
 - 일괄 분석 완료 후 전체 ZIP 다운로드
 - 파일명 규칙: `업로드날짜_영상제목_분석날짜시간_요약보고서.txt`
 
+### ✅ 전체 분석 다운로드 (신규)
+- **원클릭 다운로드**: "완료된 분석 전체 다운로드" 버튼
+- **TXT 형식**: 모든 완료된 분석을 하나의 텍스트 파일로 통합
+- **구조화된 포맷**: 각 분석마다 요약보고서 + 대본전문 포함
+- **다운로드 히스토리**: 모든 다운로드 이벤트 자동 기록
+- **통계 제공**: 총 다운로드 횟수, 오늘 다운로드 등
+
 ## 기능 URI 요약
 
 ### API 엔드포인트
@@ -71,6 +78,15 @@
 - `GET /api/channel/:channelId/analyses` - 채널별 분석 결과 조회
   - Response: `{ "analyses": [...] }`
 
+#### 전체 다운로드 (신규)
+- `GET /api/export/all-analyses` - 완료된 분석 전체 다운로드
+  - 파일 형식: TXT (UTF-8)
+  - 자동으로 다운로드 히스토리 기록
+  - Response: 텍스트 파일 (요약보고서 + 대본전문 × N개)
+
+- `GET /api/export/stats` - 다운로드 통계 조회
+  - Response: `{ "stats": { "total": 10, "today": 2, "recent": [...] } }`
+
 ## 미구현 기능
 - [ ] Cloudflare Pages 프로덕션 배포
 - [ ] 채널 구독 시스템 (자동 신규 영상 분석)
@@ -108,6 +124,10 @@
   - `analysis_id`, `status`, `error_message`, `upload_date`
   - `started_at`, `finished_at`, `created_at`
 
+- **export_history**: 다운로드 히스토리 (신규)
+  - `id`, `export_type`, `file_format`, `total_analyses`
+  - `file_size_bytes`, `exported_at`, `ip_address`, `user_agent`
+
 ### 스토리지 서비스
 - **Cloudflare D1**: SQLite 기반 관계형 데이터베이스
 - **로컬 개발**: `.wrangler/state/v3/d1` (자동 생성)
@@ -141,6 +161,13 @@
 1. "분석 히스토리" 섹션에서 채널 선택
 2. "ZIP 다운로드" 버튼 클릭
 3. `채널명_날짜_보고서모음.zip` 파일 다운로드
+
+### 전체 분석 다운로드 (신규 - 원클릭)
+1. "분석 히스토리" 섹션 상단의 "완료된 분석 전체 다운로드" 버튼 클릭
+2. 모든 완료된 분석이 단일 TXT 파일로 자동 다운로드
+3. 파일명: `completed_analyses_120files_2025-11-29.txt`
+4. 내용: 각 분석마다 요약보고서 + 대본전문 포함
+5. 다운로드는 자동으로 히스토리에 기록됨
 
 ## 배포 정보
 - **플랫폼**: Cloudflare Pages (개발 중)

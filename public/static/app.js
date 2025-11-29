@@ -930,3 +930,29 @@ async function sendToDrive(analysisId, source) {
         showError('드라이브 전송 실패: ' + (error.response?.data?.error || error.message));
     }
 }
+
+// ==================== 전체 분석 다운로드 ====================
+
+async function exportAllAnalyses() {
+    try {
+        showLoading('완료된 분석 파일을 생성하는 중...');
+        
+        // API 호출하여 다운로드
+        const downloadUrl = '/api/export/all-analyses';
+        
+        // 새 탭에서 다운로드 링크 열기
+        window.open(downloadUrl, '_blank');
+        
+        hideLoading();
+        showSuccess('다운로드가 시작되었습니다. 완료된 분석 파일(TXT)을 확인하세요.');
+        
+        setTimeout(() => {
+            hideSuccess();
+        }, 5000);
+        
+    } catch (error) {
+        hideLoading();
+        console.error('다운로드 오류:', error);
+        showError('다운로드 실패: ' + (error.message || '알 수 없는 오류'));
+    }
+}
