@@ -1213,7 +1213,7 @@ app.get('/api/export/all-analyses', async (c) => {
         AND summary IS NOT NULL 
         AND summary != ''
       ORDER BY created_at DESC
-      LIMIT 200
+      LIMIT 3000
     `).all()
     
     if (!result.results || result.results.length === 0) {
@@ -1731,7 +1731,7 @@ app.get('/', (c) => {
                         class="bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold py-2 px-6 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl"
                     >
                         <i class="fas fa-download mr-2"></i>
-                        완료된 분석 전체 다운로드 (TXT)
+                        완료된 분석 전체 다운로드 (TXT, 최대 3000개)
                     </button>
                 </div>
                 
