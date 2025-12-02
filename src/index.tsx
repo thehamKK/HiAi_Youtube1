@@ -781,10 +781,14 @@ app.post('/api/analyze/transcript', async (c) => {
   }
   
   try {
+    const supabase = createSupabaseClient(env)
+    
     // 이미 분석된 영상인지 확인
-    const existing = await env.DB.prepare(`
-      SELECT id, status FROM analyses WHERE video_id = ?
-    `).bind(videoId).first()
+    const { data: existing } = await supabase
+      .from('analyses')
+      .select('id, status')
+      .eq('video_id', videoId)
+      .single()
     
     if (existing) {
       return c.json({
@@ -831,13 +835,25 @@ app.post('/api/analyze/transcript', async (c) => {
       }
     }
     
-    // DB에 저장 (transcript_only 상태, source='single')
-    const result = await env.DB.prepare(`
-      INSERT INTO analyses (video_id, url, transcript, title, upload_date, channel_id, channel_name, status, source, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'transcript_only', 'single', CURRENT_TIMESTAMP)
-    `).bind(videoId, videoUrl, transcript, title || null, uploadDate || null, channelId || null, channelName || null).run()
+    // Supabase에 저장 (transcript_only 상태, source='single')
+    const { data: newAnalysis, error: insertError } = await supabase
+      .from('analyses')
+      .insert({
+        video_id: videoId,
+        url: videoUrl,
+        transcript,
+        title: title || null,
+        channel_id: channelId || null,
+        channel_name: channelName || null,
+        status: 'transcript_only',
+        source: 'single'
+      })
+      .select()
+      .single()
     
-    const analysisId = result.meta.last_row_id
+    if (insertError) throw insertError
+    
+    const analysisId = newAnalysis.id
     
     return c.json({
       success: true,
@@ -871,17 +887,20 @@ app.post('/api/analyze/report', async (c) => {
   }
   
   try {
+    const supabase = createSupabaseClient(env)
     let targetTranscript: string
     let videoTitle: string | undefined
     let targetAnalysisId: number
     
     if (analysisId) {
-      // DB에서 대본 가져오기
-      const analysis = await env.DB.prepare(`
-        SELECT transcript, title FROM analyses WHERE id = ?
-      `).bind(analysisId).first()
+      // Supabase에서 대본 가져오기
+      const { data: analysis, error } = await supabase
+        .from('analyses')
+        .select('transcript, title')
+        .eq('id', analysisId)
+        .single()
       
-      if (!analysis) {
+      if (error || !analysis) {
         return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
       }
       
@@ -904,11 +923,14 @@ app.post('/api/analyze/report', async (c) => {
       }, 500)
     }
     
-    // DB 업데이트 (analysisId가 있는 경우에만)
+    // Supabase 업데이트 (analysisId가 있는 경우에만)
     if (targetAnalysisId > 0) {
-      await env.DB.prepare(`
-        UPDATE analyses SET summary = ?, status = 'completed' WHERE id = ?
-      `).bind(summary, targetAnalysisId).run()
+      const { error: updateError } = await supabase
+        .from('analyses')
+        .update({ summary, status: 'completed' })
+        .eq('id', targetAnalysisId)
+      
+      if (updateError) throw updateError
     }
     
     return c.json({
@@ -949,6 +971,8 @@ app.post('/api/channel/analyze', async (c) => {
   }
   
   try {
+    const supabase = createSupabaseClient(env)
+    
     // 채널 정보 추출
     const channelInfo = await getChannelFromVideoUrl(videoUrl, env.YOUTUBE_API_KEY)
     if (!channelInfo) {
@@ -957,12 +981,12 @@ app.post('/api/channel/analyze', async (c) => {
     
     const { channelId, channelName } = channelInfo
     
-    // 채널 영상 목록 가져오기 (중복 제거 후 부족한 만큼 추가)
-    const newVideos = await getChannelVideosWithDuplicateRemoval(
+    // 채널 영상 목록 가져오기 (중복 제거 - Supabase 사용)
+    const newVideos = await getChannelVideosWithDuplicateRemovalSupabase(
       channelId, 
       env.YOUTUBE_API_KEY, 
       maxVideos,
-      env.DB
+      supabase
     )
     
     if (!newVideos) {
@@ -978,66 +1002,45 @@ app.post('/api/channel/analyze', async (c) => {
       })
     }
     
-    // channels 테이블에 채널 정보 저장 (이미 있으면 무시)
-    await env.DB.prepare(`
-      INSERT OR IGNORE INTO channels (channel_id, channel_name, video_count)
-      VALUES (?, ?, ?)
-    `).bind(channelId, channelName, newVideos.length).run()
-    
     // batch_jobs 생성
-    const batchResult = await env.DB.prepare(`
-      INSERT INTO batch_jobs (channel_id, channel_name, total_videos, completed, failed, status)
-      VALUES (?, ?, ?, 0, 0, 'running')
-    `).bind(channelId, channelName, newVideos.length).run()
+    const { data: batchJob, error: batchError } = await supabase
+      .from('batch_jobs')
+      .insert({
+        channel_id: channelId,
+        channel_name: channelName,
+        total_videos: newVideos.length,
+        completed_videos: 0,
+        failed_videos: 0,
+        status: 'processing'
+      })
+      .select()
+      .single()
     
-    const batchId = batchResult.meta.last_row_id
+    if (batchError) throw batchError
     
-    // batch_videos 생성
-    for (const video of newVideos) {
-      const uploadDate = video.publishedAt ? video.publishedAt.split('T')[0].replace(/-/g, '') : null
-      
-      await env.DB.prepare(`
-        INSERT INTO batch_videos (batch_id, video_id, video_title, video_url, upload_date, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `).bind(batchId, video.videoId, video.title, video.url, uploadDate).run()
-    }
+    const batchId = batchJob.id
+    
+    // batch_videos 생성 (bulk insert)
+    const batchVideos = newVideos.map(video => ({
+      batch_id: batchId,
+      video_id: video.videoId,
+      title: video.title,
+      url: video.url,
+      status: 'pending'
+    }))
+    
+    const { error: videosError } = await supabase
+      .from('batch_videos')
+      .insert(batchVideos)
+    
+    if (videosError) throw videosError
     
     console.log(`✅ 배치 작업 생성 완료: ${newVideos.length}개 영상`)
     console.log(`📋 첫 번째 영상 데이터:`, JSON.stringify(newVideos[0]))
     
     // 백그라운드에서 자동 처리 시작 (비동기, 응답을 기다리지 않음)
-    c.executionCtx.waitUntil(
-      (async () => {
-        for (const video of newVideos) {
-          try {
-            const videoData = await env.DB.prepare(`
-              SELECT * FROM batch_videos WHERE batch_id = ? AND video_id = ?
-            `).bind(batchId, video.videoId).first()
-            
-            if (videoData && videoData.status === 'pending') {
-              await processVideoAnalysis(
-                env.DB,
-                videoData.id as number,
-                videoData.video_url as string,
-                videoData.video_id as string,
-                videoData.video_title as string,
-                channelId,
-                channelName,
-                videoData.upload_date as string | null,
-                env.GEMINI_API_KEY
-              )
-            }
-          } catch (error) {
-            console.error(`영상 ${video.videoId} 자동 처리 오류:`, error)
-          }
-        }
-        
-        // 모든 영상 처리 완료 후 배치 완료 처리
-        await env.DB.prepare(`
-          UPDATE batch_jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).bind(batchId).run()
-      })()
-    )
+    // TODO: Supabase 버전으로 변환 필요 - 현재는 수동 처리 API 사용
+    // c.executionCtx.waitUntil(...)
     
     // 메시지 생성
     let message = ''
@@ -1080,19 +1083,26 @@ app.post('/api/channel/process/:batchId', async (c) => {
   }
   
   try {
-    // 다음 pending 영상 가져오기
-    const nextVideo = await env.DB.prepare(`
-      SELECT * FROM batch_videos 
-      WHERE batch_id = ? AND status = 'pending' 
-      ORDER BY id ASC 
-      LIMIT 1
-    `).bind(batchId).first()
+    const supabase = createSupabaseClient(env)
     
-    if (!nextVideo) {
+    // 다음 pending 영상 가져오기
+    const { data: nextVideo, error: nextError } = await supabase
+      .from('batch_videos')
+      .select('*')
+      .eq('batch_id', batchId)
+      .eq('status', 'pending')
+      .order('id', { ascending: true })
+      .limit(1)
+      .single()
+    
+    if (nextError || !nextVideo) {
       // 모든 영상 처리 완료
-      await env.DB.prepare(`
-        UPDATE batch_jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).bind(batchId).run()
+      const { error: updateError } = await supabase
+        .from('batch_jobs')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('id', batchId)
+      
+      if (updateError) throw updateError
       
       return c.json({
         success: true,
@@ -1102,20 +1112,22 @@ app.post('/api/channel/process/:batchId', async (c) => {
     }
     
     // 배치에서 채널 정보 가져오기
-    const batch = await env.DB.prepare(`
-      SELECT channel_id, channel_name FROM batch_jobs WHERE id = ?
-    `).bind(batchId).first()
+    const { data: batch } = await supabase
+      .from('batch_jobs')
+      .select('channel_id, channel_name')
+      .eq('id', batchId)
+      .single()
     
     // 영상 자동 분석 실행 (1단계 + 2단계)
-    const result = await processVideoAnalysis(
-      env.DB,
+    const result = await processVideoAnalysisSupabase(
+      supabase,
       nextVideo.id as number,
-      nextVideo.video_url as string,
+      nextVideo.url as string,
       nextVideo.video_id as string,
-      nextVideo.video_title as string,
+      nextVideo.title as string,
       batch?.channel_id as string | null,
       batch?.channel_name as string | null,
-      nextVideo.upload_date as string | null,
+      null,
       env.GEMINI_API_KEY
     )
     
@@ -1149,19 +1161,28 @@ app.get('/api/channel/status/:batchId', async (c) => {
   }
   
   try {
-    const batch = await env.DB.prepare(`
-      SELECT * FROM batch_jobs WHERE id = ?
-    `).bind(batchId).first()
+    const supabase = createSupabaseClient(env)
     
-    if (!batch) {
+    const { data: batch, error: batchError } = await supabase
+      .from('batch_jobs')
+      .select('*')
+      .eq('id', batchId)
+      .single()
+    
+    if (batchError || !batch) {
       return c.json({ error: '배치를 찾을 수 없습니다.' }, 404)
     }
     
-    const videos = await env.DB.prepare(`
-      SELECT * FROM batch_videos WHERE batch_id = ? ORDER BY id ASC
-    `).bind(batchId).all()
+    const { data: videos, error: videosError } = await supabase
+      .from('batch_videos')
+      .select('*')
+      .eq('batch_id', batchId)
+      .order('id', { ascending: true })
     
-    const completed = batch.completed as number
+    if (videosError) throw videosError
+    
+    const completed = batch.completed_videos as number
+    const failed = batch.failed_videos as number
     const total = batch.total_videos as number
     const percentage = total > 0 ? Math.round((completed / total) * 100) : 0
     
@@ -1170,10 +1191,10 @@ app.get('/api/channel/status/:batchId', async (c) => {
       progress: {
         total,
         completed,
-        failed: batch.failed,
+        failed,
         percentage
       },
-      videos: videos.results
+      videos
     })
     
   } catch (error: any) {
@@ -2161,5 +2182,234 @@ app.post('/api/send-drive/batch/:batchId', async (c) => {
     }, 500)
   }
 })
+
+// ============================================
+// Supabase Helper Functions
+// ============================================
+
+async function getChannelVideosWithDuplicateRemovalSupabase(
+  channelId: string,
+  apiKey: string,
+  targetCount: number,
+  supabase: any
+): Promise<any[] | null> {
+  try {
+    let allVideos: any[] = []
+    let pageToken: string | undefined = undefined
+    let pageCount = 0
+    const maxPages = Math.ceil(targetCount / 50) + 10
+    
+    console.log(`📺 채널 영상 가져오기 시작 (목표: ${targetCount}개, Shorts 제외)`)
+    
+    while (allVideos.length < targetCount && pageCount < maxPages) {
+      pageCount++
+      
+      const result = await getChannelVideos(channelId, apiKey, 50, pageToken)
+      
+      if (!result) {
+        console.error('YouTube API 호출 실패')
+        break
+      }
+      
+      const { videos, nextPageToken } = result
+      
+      if (videos.length === 0) {
+        console.log('더 이상 영상이 없습니다.')
+        break
+      }
+      
+      // Shorts 영상 필터링
+      const filteredVideos = videos.filter((v: any) => {
+        const title = v.title.toLowerCase()
+        const isShorts = title.includes('shorts') || 
+                        title.includes('short') || 
+                        title.includes('#shorts') ||
+                        title.includes('#short')
+        return !isShorts
+      })
+      
+      if (filteredVideos.length === 0) {
+        if (!nextPageToken) break
+        pageToken = nextPageToken
+        continue
+      }
+      
+      // Supabase에서 중복 확인
+      const videoIds = filteredVideos.map((v: any) => v.videoId)
+      const { data: existingAnalyses } = await supabase
+        .from('analyses')
+        .select('video_id')
+        .in('video_id', videoIds)
+      
+      const existingVideoIds = new Set(existingAnalyses?.map((r: any) => r.video_id) || [])
+      const newVideos = filteredVideos.filter((v: any) => !existingVideoIds.has(v.videoId))
+      
+      console.log(`✅ 페이지 ${pageCount}: ${newVideos.length}개 신규 (${filteredVideos.length - newVideos.length}개 중복)`)
+      
+      allVideos = allVideos.concat(newVideos)
+      
+      if (allVideos.length >= targetCount) {
+        allVideos = allVideos.slice(0, targetCount)
+        break
+      }
+      
+      if (!nextPageToken) break
+      pageToken = nextPageToken
+    }
+    
+    console.log(`📊 최종 결과: ${allVideos.length}개 영상`)
+    return allVideos
+    
+  } catch (error) {
+    console.error('채널 영상 목록 가져오기 오류:', error)
+    return null
+  }
+}
+
+async function processVideoAnalysisSupabase(
+  supabase: any,
+  batchVideoId: number,
+  videoUrl: string,
+  videoId: string,
+  title: string,
+  channelId: string | null,
+  channelName: string | null,
+  uploadDate: string | null,
+  geminiApiKey: string
+): Promise<any> {
+  try {
+    // 1단계: 대본 추출
+    console.log(`\n🎬 배치 영상 분석 시작: ${title}`)
+    console.log('📝 1단계 시작: 대본 추출 (Gemini API)')
+    
+    let transcript: string | null = await extractTranscriptFromYouTube(videoId)
+    
+    if (!transcript) {
+      const transcriptResult = await extractTranscriptWithGemini(videoUrl, geminiApiKey)
+      if (!transcriptResult) {
+        // 실패 처리
+        await supabase
+          .from('batch_videos')
+          .update({ 
+            status: 'failed',
+            error_message: '대본 추출 실패',
+            finished_at: new Date().toISOString()
+          })
+          .eq('id', batchVideoId)
+        
+        return { success: false, error: '대본 추출 실패' }
+      }
+      transcript = transcriptResult.transcript
+    }
+    
+    console.log(`✅ 대본 추출 완료 (${transcript.length}자)`)
+    
+    // analyses 테이블에 저장
+    const { data: newAnalysis, error: insertError } = await supabase
+      .from('analyses')
+      .insert({
+        video_id: videoId,
+        url: videoUrl,
+        transcript,
+        title,
+        channel_id: channelId,
+        channel_name: channelName,
+        status: 'transcript_only',
+        source: 'batch'
+      })
+      .select()
+      .single()
+    
+    if (insertError) throw insertError
+    
+    const analysisId = newAnalysis.id
+    console.log(`💾 분석 결과 저장 완료 (ID: ${analysisId})`)
+    
+    // Rate Limit 방지
+    console.log(`⏳ 65초 대기 중... (Rate Limit 방지)`)
+    await new Promise(resolve => setTimeout(resolve, 65000))
+    
+    // 2단계: 요약 생성
+    console.log('📊 2단계 시작: AI 요약 보고서 생성')
+    const summary = await generateSummaryWithGemini(transcript, geminiApiKey, title)
+    
+    if (!summary) {
+      await supabase
+        .from('analyses')
+        .update({ status: 'failed' })
+        .eq('id', analysisId)
+      
+      await supabase
+        .from('batch_videos')
+        .update({ 
+          status: 'failed',
+          analysis_id: analysisId,
+          error_message: '요약 생성 실패',
+          finished_at: new Date().toISOString()
+        })
+        .eq('id', batchVideoId)
+      
+      return { success: false, error: '요약 생성 실패' }
+    }
+    
+    // 요약 저장
+    await supabase
+      .from('analyses')
+      .update({ summary, status: 'completed' })
+      .eq('id', analysisId)
+    
+    console.log('✅ 보고서 생성 완료')
+    
+    // batch_videos 업데이트
+    await supabase
+      .from('batch_videos')
+      .update({ 
+        status: 'completed',
+        analysis_id: analysisId,
+        finished_at: new Date().toISOString()
+      })
+      .eq('id', batchVideoId)
+    
+    // batch_jobs 카운터 업데이트
+    const { data: batchVideo } = await supabase
+      .from('batch_videos')
+      .select('batch_id')
+      .eq('id', batchVideoId)
+      .single()
+    
+    if (batchVideo) {
+      // completed_videos 증가
+      const { data: currentBatch } = await supabase
+        .from('batch_jobs')
+        .select('completed_videos')
+        .eq('id', batchVideo.batch_id)
+        .single()
+      
+      await supabase
+        .from('batch_jobs')
+        .update({ completed_videos: (currentBatch?.completed_videos || 0) + 1 })
+        .eq('id', batchVideo.batch_id)
+    }
+    
+    console.log(`✅ 영상 분석 완료: ${title}\n`)
+    
+    return { success: true, analysisId, summary }
+    
+  } catch (error: any) {
+    console.error('❌ 영상 분석 오류:', error)
+    
+    // 실패 처리
+    await supabase
+      .from('batch_videos')
+      .update({ 
+        status: 'failed',
+        error_message: error.message,
+        finished_at: new Date().toISOString()
+      })
+      .eq('id', batchVideoId)
+    
+    return { success: false, error: error.message }
+  }
+}
 
 export default app
