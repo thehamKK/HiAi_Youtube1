@@ -1,15 +1,16 @@
-# Hi DB v2.6.0 - YouTube 영상 분석 시스템 (자동 재시작 모니터링)
+# Hi DB v2.7.0 - YouTube 영상 분석 시스템 (Supabase 마이그레이션)
 
 ## 프로젝트 개요
 - **이름**: Hi DB (YouTube Video Analysis System)
-- **버전**: 2.6.0 (자동 모니터링 및 무인 운영)
+- **버전**: 2.7.0 (Supabase PostgreSQL 마이그레이션)
 - **목표**: YouTube 영상/채널의 대본 추출 및 AI 요약 보고서 자동 생성
 - **주요 기능**:
   - 단일 영상 분석 (대본 추출 + AI 보고서 생성)
   - 채널 일괄 분석 (여러 영상 자동 처리)
   - 채널별 ZIP 다운로드 (보고서 모음)
   - 분석 히스토리 관리
-  - **자동 모니터링 및 재시작 (NEW)**
+  - 자동 모니터링 및 재시작
+  - **🆕 Supabase PostgreSQL 마이그레이션 (진행 중)**
 
 ## 완료된 기능
 
@@ -88,7 +89,49 @@
 - `GET /api/export/stats` - 다운로드 통계 조회
   - Response: `{ "stats": { "total": 10, "today": 2, "recent": [...] } }`
 
+## 🚀 Supabase 마이그레이션 (v2.7.0)
+
+### ✅ Phase 1: 기본 설정 (완료)
+- [x] Supabase 프로젝트 생성 (hvmdwkugpvqigpfdfrvz.supabase.co)
+- [x] PostgreSQL 스키마 생성 (4개 테이블)
+- [x] Secret Key 설정 및 연결 테스트
+- [x] `@supabase/supabase-js` 패키지 설치
+- [x] 타입 정의 및 유틸리티 생성
+
+### 🔄 Phase 2: API 코드 마이그레이션 (20% 완료)
+- [x] ✅ `GET /api/history` - Supabase 변환 완료
+- [x] ✅ `GET /api/analysis/:id` - Supabase 변환 완료
+- [ ] ⏳ `POST /api/analyze/transcript` - D1 사용 중
+- [ ] ⏳ `POST /api/analyze/report` - D1 사용 중
+- [ ] ⏳ `POST /api/channel/analyze` - D1 사용 중
+- [ ] ⏳ 나머지 12개 API - D1 사용 중
+
+### 📊 현재 상태
+- **데이터베이스**: Hybrid (Supabase + D1 병행)
+  - Supabase: 조회 API (2개) ✅
+  - D1: 생성/수정 API (15개) ⏳
+- **빌드**: ✅ 성공
+- **로컬 테스트**: ✅ 정상 작동
+- **배포**: 로컬 개발 환경
+
+### 🎯 다음 단계
+1. 나머지 15개 API Supabase 변환 (예상: 2-4시간)
+2. 전체 기능 테스트
+3. Cloudflare Pages 프로덕션 배포
+4. D1 의존성 완전 제거
+
+### 📚 마이그레이션 문서
+- `QUICK_START.md` - 15분 빠른 시작 가이드
+- `BACKEND_STRUCTURE.md` - 백엔드 구조 설명
+- `PHASE1_COMPLETED.md` - Phase 1 완료 요약
+- `PHASE2_MIGRATION_PLAN.md` - 마이그레이션 전략
+- `MIGRATION_STATUS.md` - 진행 상황 추적
+- `PHASE2_SUCCESS.md` - 현재 성과 및 다음 단계
+
+---
+
 ## 미구현 기능
+- [ ] Supabase 마이그레이션 완료 (80% 남음)
 - [ ] Cloudflare Pages 프로덕션 배포
 - [ ] 채널 구독 시스템 (자동 신규 영상 분석)
 - [ ] 다국어 지원 (영어, 일본어, 중국어)
@@ -130,8 +173,12 @@
   - `file_size_bytes`, `exported_at`, `ip_address`, `user_agent`
 
 ### 스토리지 서비스
-- **Cloudflare D1**: SQLite 기반 관계형 데이터베이스
-- **로컬 개발**: `.wrangler/state/v3/d1` (자동 생성)
+- **Supabase PostgreSQL**: 클라우드 PostgreSQL 데이터베이스 (진행 중) 🆕
+  - Project URL: `https://hvmdwkugpvqigpfdfrvz.supabase.co`
+  - 조회 API 2개 마이그레이션 완료
+- **Cloudflare D1**: SQLite 기반 관계형 데이터베이스 (기존)
+  - 로컬 개발: `.wrangler/state/v3/d1` (자동 생성)
+  - 생성/수정 API 15개 아직 사용 중
 
 ### 데이터 흐름
 1. 사용자 입력 (YouTube URL)
@@ -172,49 +219,78 @@
 
 ## 배포 정보
 - **플랫폼**: Cloudflare Pages (개발 중)
-- **상태**: 로컬 개발 환경
+- **상태**: 로컬 개발 환경 + Supabase 연결 성공 ✅
 - **기술 스택**:
   - Backend: Hono + TypeScript + Cloudflare Workers
   - Frontend: Vanilla JS + TailwindCSS + Axios
-  - Database: Cloudflare D1 (SQLite)
+  - Database: **Supabase PostgreSQL** (진행 중) + Cloudflare D1 (SQLite)
   - APIs: YouTube Data API v3, Gemini API
-- **마지막 업데이트**: 2025-12-01
-- **Git 커밋**: `v2.6.0` (자동 모니터링 시스템 추가)
+- **마지막 업데이트**: 2025-12-02
+- **Git 커밋**: `v2.7.0` (Supabase 마이그레이션 Phase 2)
 
 ## 환경 변수
 ```bash
 # .dev.vars (로컬 개발)
 YOUTUBE_API_KEY=your_youtube_api_key
 GEMINI_API_KEY=your_gemini_api_key
+
+# Supabase 환경 변수 (v2.7.0+)
+SUPABASE_URL=https://hvmdwkugpvqigpfdfrvz.supabase.co
+SUPABASE_SECRET_KEY=your_supabase_secret_key
+```
+
+### Cloudflare Secrets (프로덕션 배포 시)
+```bash
+npx wrangler secret put SUPABASE_URL
+npx wrangler secret put SUPABASE_SECRET_KEY
+npx wrangler secret put YOUTUBE_API_KEY
+npx wrangler secret put GEMINI_API_KEY
 ```
 
 ## 로컬 개발 실행
+
+### 기본 설정
 ```bash
 # 의존성 설치
 npm install
 
-# 데이터베이스 마이그레이션
+# D1 데이터베이스 마이그레이션
 npm run db:migrate:local
+
+# Supabase 환경 변수 설정 (.dev.vars 파일 확인)
+# SUPABASE_URL과 SUPABASE_SECRET_KEY가 필요합니다
 
 # 빌드
 npm run build
 
 # PM2로 실행 (자동 메모리 관리 + Cron 재시작)
 pm2 start ecosystem.config.cjs
+```
 
+### 배치 처리 (선택 사항)
+```bash
 # 배치 처리 시작
 ./process_batch.sh 1 > batch_process.log 2>&1 &
 
 # 모니터링 시스템 시작 (자동 재시작)
 ./monitor_and_restart.sh > monitor.log 2>&1 &
+```
 
-# 로그 확인
+### 로그 및 테스트
+```bash
+# PM2 로그 확인
 pm2 logs hidb --nostream
+
+# 배치 처리 로그
 tail -f batch_process.log
+
+# 모니터링 로그
 tail -f monitor.log
 
-# 테스트
+# API 테스트
 curl http://localhost:3000
+curl http://localhost:3000/api/history  # ✅ Supabase
+curl http://localhost:3000/api/analysis/1  # ✅ Supabase
 ```
 
 ## 문제 해결
@@ -232,6 +308,53 @@ curl http://localhost:3000
 - PM2 로그 확인: `pm2 logs hidb`
 - 데이터베이스 상태 확인: `npm run db:console:local`
 - 캐시 제거 후 재시작: `rm -rf .wrangler && npm run build && pm2 restart hidb`
+
+## v2.7.0 Supabase 마이그레이션 (2025-12-02)
+
+### 🚀 Supabase PostgreSQL 마이그레이션 시작
+**목표**: Cloudflare Pages 완전 배포를 위한 D1 → Supabase 전환
+
+### ✅ Phase 1 완료 (100%)
+- ✅ Supabase 프로젝트 생성 및 연결 성공
+- ✅ PostgreSQL 스키마 생성 (4개 테이블)
+  - `analyses`, `batch_jobs`, `batch_videos`, `download_history`
+- ✅ Secret Key 설정 및 인증 테스트
+- ✅ `@supabase/supabase-js` 패키지 설치
+- ✅ TypeScript 타입 정의 (`src/lib/supabase.ts`)
+
+### 🔄 Phase 2 진행 중 (20% 완료)
+- ✅ **API 변환 완료** (2개):
+  - `GET /api/history` - 히스토리 조회
+  - `GET /api/analysis/:id` - 개별 분석 조회
+- ✅ 빌드 & 테스트 성공
+- ✅ Supabase 쿼리 정상 작동 확인
+- ⏳ **변환 대기** (15개 API):
+  - POST API: 분석, 배치, 이메일, 드라이브
+  - 나머지 GET API: 채널, 통계, 내보내기
+
+### 📊 Hybrid 아키텍처 (현재)
+```
+Frontend → Hono Backend → Supabase (조회 2개 API) ✅
+                        → D1 (생성/수정 15개 API) ⏳
+```
+
+### 🎯 예상 성과 (완료 시)
+- **처리 속도**: 5-6일 → 2-3시간 (50배 빠름)
+- **병렬 처리**: 1개 워커 → 무제한 워커
+- **메모리**: 987MB 제한 → 128MB × N (무제한)
+- **확장성**: 자동 스케일링 지원
+- **비용**: 로컬 무료 → $6-20/월 (프로덕션)
+
+### 📚 생성된 문서
+- `QUICK_START.md` - Supabase 15분 빠른 시작
+- `BACKEND_STRUCTURE.md` - 백엔드 구조 명확한 설명
+- `PHASE1_COMPLETED.md` - Phase 1 완료 요약
+- `PHASE2_MIGRATION_PLAN.md` - 마이그레이션 전략
+- `MIGRATION_STATUS.md` - 진행 상황 추적
+- `PHASE2_SUCCESS.md` - 현재 성과 및 다음 단계
+- `API_MIGRATION_EXAMPLES.md` - 5가지 실전 변환 예시
+
+---
 
 ## v2.6.0 자동 모니터링 시스템 (2025-12-01)
 
