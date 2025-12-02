@@ -970,6 +970,9 @@ app.post('/api/channel/analyze', async (c) => {
     return c.json({ error: '영상 URL이 필요합니다.' }, 400)
   }
   
+  // Cloudflare Workers 서브요청 제한 (50개) 때문에 maxVideos 제한
+  const limitedMaxVideos = Math.min(maxVideos, 100)
+  
   try {
     const supabase = createSupabaseClient(env)
     
@@ -985,7 +988,7 @@ app.post('/api/channel/analyze', async (c) => {
     const newVideos = await getChannelVideosWithDuplicateRemovalSupabase(
       channelId, 
       env.YOUTUBE_API_KEY, 
-      maxVideos,
+      limitedMaxVideos,
       supabase
     )
     
