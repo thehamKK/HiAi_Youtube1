@@ -6,7 +6,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 /**
- * 데이터베이스 타입 정의
+ * 데이터베이스 타입 정의 (실제 SQL 스키마 기반)
  */
 export type Database = {
   public: {
@@ -15,71 +15,58 @@ export type Database = {
         Row: {
           id: number;
           video_id: string;
-          url: string;
-          transcript: string | null;
-          summary: string | null;
-          created_at: string;
           channel_id: string | null;
-          channel_name: string | null;
-          title: string | null;
-          upload_date: string | null;
-          status: string;
-          source: string;
+          title: string;
+          url: string;
+          summary: string | null;
+          transcript: string | null;
+          status: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
+          created_at: string;
+          updated_at: string;
         };
         Insert: {
           video_id: string;
-          url: string;
-          transcript?: string | null;
-          summary?: string | null;
           channel_id?: string | null;
-          channel_name?: string | null;
-          title?: string | null;
-          upload_date?: string | null;
-          status?: string;
-          source?: string;
+          title: string;
+          url: string;
+          summary?: string | null;
+          transcript?: string | null;
+          status?: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
         };
         Update: {
           video_id?: string;
-          url?: string;
-          transcript?: string | null;
-          summary?: string | null;
           channel_id?: string | null;
-          channel_name?: string | null;
-          title?: string | null;
-          upload_date?: string | null;
-          status?: string;
-          source?: string;
+          title?: string;
+          url?: string;
+          summary?: string | null;
+          transcript?: string | null;
+          status?: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
         };
       };
       batch_jobs: {
         Row: {
           id: number;
           channel_id: string;
-          channel_name: string | null;
+          channel_name: string;
           total_videos: number;
-          completed_videos: number;
-          failed_videos: number;
-          status: string;
+          processed_videos: number;
+          status: 'pending' | 'processing' | 'completed' | 'failed';
           created_at: string;
-          completed_at: string | null;
+          updated_at: string;
         };
         Insert: {
           channel_id: string;
-          channel_name?: string | null;
+          channel_name: string;
           total_videos?: number;
-          completed_videos?: number;
-          failed_videos?: number;
-          status?: string;
-          completed_at?: string | null;
+          processed_videos?: number;
+          status?: 'pending' | 'processing' | 'completed' | 'failed';
         };
         Update: {
           channel_id?: string;
-          channel_name?: string | null;
+          channel_name?: string;
           total_videos?: number;
-          completed_videos?: number;
-          failed_videos?: number;
-          status?: string;
-          completed_at?: string | null;
+          processed_videos?: number;
+          status?: 'pending' | 'processing' | 'completed' | 'failed';
         };
       };
       batch_videos: {
@@ -87,64 +74,41 @@ export type Database = {
           id: number;
           batch_id: number;
           video_id: string;
-          video_title: string | null;
-          video_url: string | null;
-          analysis_id: number | null;
-          status: string;
-          error_message: string | null;
-          upload_date: string | null;
-          started_at: string | null;
-          finished_at: string | null;
+          title: string;
+          url: string;
+          status: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
           created_at: string;
-          current_step: string;
+          updated_at: string;
         };
         Insert: {
           batch_id: number;
           video_id: string;
-          video_title?: string | null;
-          video_url?: string | null;
-          analysis_id?: number | null;
-          status?: string;
-          error_message?: string | null;
-          upload_date?: string | null;
-          started_at?: string | null;
-          finished_at?: string | null;
-          current_step?: string;
+          title: string;
+          url: string;
+          status?: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
         };
         Update: {
           batch_id?: number;
           video_id?: string;
-          video_title?: string | null;
-          video_url?: string | null;
-          analysis_id?: number | null;
-          status?: string;
-          error_message?: string | null;
-          upload_date?: string | null;
-          started_at?: string | null;
-          finished_at?: string | null;
-          current_step?: string;
+          title?: string;
+          url?: string;
+          status?: 'pending' | 'processing' | 'completed' | 'failed' | 'transcript_only';
         };
       };
-      export_history: {
+      download_history: {
         Row: {
           id: number;
-          export_type: string;
-          format: string;
-          file_size: number | null;
-          analysis_count: number | null;
-          created_at: string;
+          download_type: 'full' | 'selected';
+          video_ids: string[];
+          downloaded_at: string;
         };
         Insert: {
-          export_type: string;
-          format: string;
-          file_size?: number | null;
-          analysis_count?: number | null;
+          download_type: 'full' | 'selected';
+          video_ids: string[];
         };
         Update: {
-          export_type?: string;
-          format?: string;
-          file_size?: number | null;
-          analysis_count?: number | null;
+          download_type?: 'full' | 'selected';
+          video_ids?: string[];
         };
       };
     };
@@ -152,17 +116,27 @@ export type Database = {
 };
 
 /**
- * Supabase 클라이언트 생성
+ * Bindings 타입 정의 (Supabase 키 추가)
+ */
+export type Bindings = {
+  DB?: D1Database; // D1은 마이그레이션 완료 후 제거
+  SUPABASE_URL: string;
+  SUPABASE_SECRET_KEY: string;
+  YOUTUBE_API_KEY: string;
+  GEMINI_API_KEY: string;
+  GOOGLE_SERVICE_ACCOUNT_EMAIL?: string;
+  GOOGLE_PRIVATE_KEY?: string;
+  GOOGLE_DRIVE_FOLDER_ID?: string;
+};
+
+/**
+ * Supabase 클라이언트 생성 (Hono Context에서 호출)
  * 
- * @param supabaseUrl - Supabase Project URL
- * @param supabaseKey - Supabase Service Role Key (서버용)
+ * @param env - Cloudflare Workers Bindings (환경 변수)
  * @returns Supabase 클라이언트 인스턴스
  */
-export function createSupabaseClient(
-  supabaseUrl: string,
-  supabaseKey: string
-): SupabaseClient<Database> {
-  return createClient<Database>(supabaseUrl, supabaseKey, {
+export function createSupabaseClient(env: Bindings): SupabaseClient<Database> {
+  return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: {
       persistSession: false, // Cloudflare Workers에서는 세션 저장 불필요
       autoRefreshToken: false,
@@ -190,5 +164,6 @@ export type BatchVideo = Database['public']['Tables']['batch_videos']['Row'];
 export type BatchVideoInsert = Database['public']['Tables']['batch_videos']['Insert'];
 export type BatchVideoUpdate = Database['public']['Tables']['batch_videos']['Update'];
 
-export type ExportHistory = Database['public']['Tables']['export_history']['Row'];
-export type ExportHistoryInsert = Database['public']['Tables']['export_history']['Insert'];
+export type DownloadHistory = Database['public']['Tables']['download_history']['Row'];
+export type DownloadHistoryInsert = Database['public']['Tables']['download_history']['Insert'];
+export type DownloadHistoryUpdate = Database['public']['Tables']['download_history']['Update'];

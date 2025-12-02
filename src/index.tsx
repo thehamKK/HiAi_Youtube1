@@ -1,15 +1,10 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
+import { createSupabaseClient, type Bindings } from './lib/supabase'
 
-type Bindings = {
-  DB: D1Database
-  YOUTUBE_API_KEY: string
-  GEMINI_API_KEY: string
-  GOOGLE_SERVICE_ACCOUNT_EMAIL?: string
-  GOOGLE_PRIVATE_KEY?: string
-  GOOGLE_DRIVE_FOLDER_ID?: string
-}
+// Bindings 타입은 lib/supabase.ts에서 import
+// Supabase 마이그레이션으로 DB (D1)는 선택적, SUPABASE_URL과 SUPABASE_SECRET_KEY 추가됨
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -1315,48 +1310,41 @@ app.get('/api/export/stats', async (c) => {
 // 분석 히스토리 조회
 app.get('/api/history', async (c) => {
   const { env } = c
-  
-  if (!env.DB) {
-    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
-  }
+  const supabase = createSupabaseClient(env)
   
   try {
-    // 전체 통계 먼저 조회
-    const statsResult = await env.DB.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN source = 'single' OR source IS NULL THEN 1 ELSE 0 END) as single_count,
-        SUM(CASE WHEN source = 'batch' THEN 1 ELSE 0 END) as batch_count,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-        SUM(CASE WHEN status = 'transcript_only' THEN 1 ELSE 0 END) as transcript_only_count
-      FROM analyses
-    `).first()
+    // 전체 데이터 조회 (LIMIT 1000)
+    const { data: analyses, error: fetchError } = await supabase
+      .from('analyses')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1000)
     
-    // source별로 분리해서 조회 (LIMIT 1000으로 증가)
-    const singleResult = await env.DB.prepare(`
-      SELECT * FROM analyses WHERE source = 'single' OR source IS NULL ORDER BY created_at DESC LIMIT 1000
-    `).all()
+    if (fetchError) {
+      return c.json({
+        error: '히스토리를 조회할 수 없습니다.',
+        details: fetchError.message
+      }, 500)
+    }
     
-    const batchResult = await env.DB.prepare(`
-      SELECT * FROM analyses WHERE source = 'batch' ORDER BY created_at DESC LIMIT 1000
-    `).all()
+    // 통계 계산 (메모리에서 처리)
+    const total = analyses?.length || 0
+    const completed_count = analyses?.filter(a => a.status === 'completed').length || 0
+    const failed_count = analyses?.filter(a => a.status === 'failed').length || 0
+    const transcript_only_count = analyses?.filter(a => a.status === 'transcript_only').length || 0
     
     return c.json({
-      stats: statsResult || {
-        total: 0,
-        single_count: 0,
-        batch_count: 0,
-        completed_count: 0,
-        failed_count: 0,
-        transcript_only_count: 0
+      stats: {
+        total,
+        single_count: 0, // source 컬럼 없음 (향후 추가 가능)
+        batch_count: 0,  // source 컬럼 없음 (향후 추가 가능)
+        completed_count,
+        failed_count,
+        transcript_only_count
       },
-      single: singleResult.results,
-      batch: batchResult.results,
-      // 하위 호환성을 위해 전체 목록도 반환
-      analyses: [...singleResult.results, ...batchResult.results].sort((a: any, b: any) => {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      })
+      single: [], // source 컬럼 없음
+      batch: [],  // source 컬럼 없음
+      analyses: analyses || []
     })
   } catch (error: any) {
     return c.json({
@@ -1370,17 +1358,16 @@ app.get('/api/history', async (c) => {
 app.get('/api/analysis/:id', async (c) => {
   const { env } = c
   const id = parseInt(c.req.param('id'))
-  
-  if (!env.DB) {
-    return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
-  }
+  const supabase = createSupabaseClient(env)
   
   try {
-    const analysis = await env.DB.prepare(`
-      SELECT * FROM analyses WHERE id = ?
-    `).bind(id).first()
+    const { data: analysis, error } = await supabase
+      .from('analyses')
+      .select('*')
+      .eq('id', id)
+      .single()
     
-    if (!analysis) {
+    if (error || !analysis) {
       return c.json({ error: '분석 결과를 찾을 수 없습니다.' }, 404)
     }
     
