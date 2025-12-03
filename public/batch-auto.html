@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자동 배치 처리 - 발품부동산TV</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">
+            <i class="fas fa-robot mr-2"></i>
+            자동 배치 처리
+        </h1>
+
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold">배치 ID: <span id="batchId">1</span></h2>
+                    <p class="text-gray-600">페이지를 열어두면 자동으로 처리됩니다</p>
+                </div>
+                <button id="toggleBtn" onclick="toggleProcessing()" 
+                    class="px-6 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold transition">
+                    <i class="fas fa-play mr-2"></i>시작
+                </button>
+            </div>
+
+            <!-- 진행률 -->
+            <div class="mb-4">
+                <div class="flex justify-between mb-2">
+                    <span class="font-semibold">진행률</span>
+                    <span id="progress" class="font-bold text-blue-600">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-4">
+                    <div id="progressBar" class="bg-blue-500 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <!-- 통계 -->
+            <div class="grid grid-cols-3 gap-4 mb-4">
+                <div class="bg-blue-50 p-4 rounded-lg text-center">
+                    <div class="text-3xl font-bold text-blue-600" id="totalCount">0</div>
+                    <div class="text-sm text-gray-600">전체</div>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg text-center">
+                    <div class="text-3xl font-bold text-green-600" id="completedCount">0</div>
+                    <div class="text-sm text-gray-600">완료</div>
+                </div>
+                <div class="bg-red-50 p-4 rounded-lg text-center">
+                    <div class="text-3xl font-bold text-red-600" id="failedCount">0</div>
+                    <div class="text-sm text-gray-600">실패</div>
+                </div>
+            </div>
+
+            <!-- 예상 시간 -->
+            <div class="bg-yellow-50 p-4 rounded-lg mb-4">
+                <div class="flex items-center justify-between">
+                    <span class="font-semibold">예상 남은 시간:</span>
+                    <span id="estimatedTime" class="font-bold text-yellow-700">계산 중...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 로그 -->
+        <div class="bg-white rounded-lg shadow-lg p-6">
+            <h3 class="text-lg font-semibold mb-4">
+                <i class="fas fa-list mr-2"></i>처리 로그
+            </h3>
+            <div id="logs" class="space-y-2 max-h-96 overflow-y-auto">
+                <p class="text-gray-500">로그가 여기에 표시됩니다...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isProcessing = false;
+        let batchId = 1;
+        let processInterval = null;
+        let startTime = null;
+
+        function addLog(message, type = 'info') {
+            const logsDiv = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString('ko-KR');
+            const colors = {
+                info: 'text-blue-600',
+                success: 'text-green-600',
+                error: 'text-red-600',
+                warning: 'text-yellow-600'
+            };
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = `${colors[type]} text-sm`;
+            logEntry.innerHTML = `<span class="font-mono">[${timestamp}]</span> ${message}`;
+            
+            if (logsDiv.children[0]?.textContent === '로그가 여기에 표시됩니다...') {
+                logsDiv.innerHTML = '';
+            }
+            
+            logsDiv.insertBefore(logEntry, logsDiv.firstChild);
+            
+            // 최대 100개 로그만 유지
+            while (logsDiv.children.length > 100) {
+                logsDiv.removeChild(logsDiv.lastChild);
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch(`/api/channel/status/${batchId}`);
+                const data = await response.json();
+                
+                const { total, completed, failed, percentage } = data.progress;
+                
+                document.getElementById('totalCount').textContent = total;
+                document.getElementById('completedCount').textContent = completed;
+                document.getElementById('failedCount').textContent = failed;
+                document.getElementById('progress').textContent = `${percentage}%`;
+                document.getElementById('progressBar').style.width = `${percentage}%`;
+                
+                // 예상 시간 계산
+                if (startTime && completed > 0) {
+                    const elapsed = (Date.now() - startTime) / 1000 / 60; // 분
+                    const avgTimePerVideo = elapsed / completed;
+                    const remaining = total - completed - failed;
+                    const estimatedMinutes = Math.ceil(avgTimePerVideo * remaining);
+                    
+                    const hours = Math.floor(estimatedMinutes / 60);
+                    const minutes = estimatedMinutes % 60;
+                    document.getElementById('estimatedTime').textContent = 
+                        hours > 0 ? `약 ${hours}시간 ${minutes}분` : `약 ${minutes}분`;
+                }
+                
+                return data;
+            } catch (error) {
+                addLog(`상태 조회 실패: ${error.message}`, 'error');
+                return null;
+            }
+        }
+
+        async function processNextVideo() {
+            if (!isProcessing) return;
+            
+            try {
+                addLog('다음 영상 처리 중...', 'info');
+                
+                const response = await fetch(`/api/channel/process/${batchId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.completed) {
+                    addLog('✅ 모든 영상 처리 완료!', 'success');
+                    stopProcessing();
+                    return;
+                }
+                
+                if (result.success) {
+                    addLog(`✅ ${result.video?.title || '영상'} 처리 완료`, 'success');
+                } else {
+                    addLog(`❌ 처리 실패: ${result.error}`, 'error');
+                }
+                
+                await updateStatus();
+                
+            } catch (error) {
+                addLog(`❌ 오류: ${error.message}`, 'error');
+            }
+        }
+
+        function startProcessing() {
+            if (isProcessing) return;
+            
+            isProcessing = true;
+            startTime = Date.now();
+            
+            const btn = document.getElementById('toggleBtn');
+            btn.innerHTML = '<i class="fas fa-stop mr-2"></i>중지';
+            btn.className = 'px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-semibold transition';
+            
+            addLog('자동 배치 처리 시작', 'info');
+            
+            // 즉시 첫 영상 처리
+            processNextVideo();
+            
+            // 60초마다 다음 영상 처리
+            processInterval = setInterval(processNextVideo, 60000);
+            
+            // 5초마다 상태 업데이트
+            setInterval(updateStatus, 5000);
+        }
+
+        function stopProcessing() {
+            isProcessing = false;
+            
+            if (processInterval) {
+                clearInterval(processInterval);
+                processInterval = null;
+            }
+            
+            const btn = document.getElementById('toggleBtn');
+            btn.innerHTML = '<i class="fas fa-play mr-2"></i>시작';
+            btn.className = 'px-6 py-3 bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold transition';
+            
+            addLog('자동 배치 처리 중지', 'warning');
+        }
+
+        function toggleProcessing() {
+            if (isProcessing) {
+                stopProcessing();
+            } else {
+                startProcessing();
+            }
+        }
+
+        // 페이지 로드 시 초기 상태 확인
+        window.addEventListener('load', () => {
+            updateStatus();
+            addLog('페이지 로드 완료. "시작" 버튼을 클릭하세요.', 'info');
+        });
+    </script>
+</body>
+</html>
