@@ -2281,9 +2281,9 @@ async function processVideoAnalysisSupabase(
   geminiApiKey: string
 ): Promise<any> {
   try {
-    // 1단계: 대본 추출
+    // 1단계: YouTube 대본 추출 (Cloudflare Pages에서 처리)
     console.log(`\n🎬 배치 영상 분석 시작: ${title}`)
-    console.log('📝 1단계 시작: 대본 추출 (Gemini API)')
+    console.log('📝 1단계: YouTube 대본 추출')
     
     let transcript: string | null = await extractTranscriptFromYouTube(videoId)
     
@@ -2307,71 +2307,38 @@ async function processVideoAnalysisSupabase(
     
     console.log(`✅ 대본 추출 완료 (${transcript.length}자)`)
     
-    // analyses 테이블에 저장
-    const { data: newAnalysis, error: insertError } = await supabase
-      .from('analyses')
-      .insert({
-        video_id: videoId,
-        url: videoUrl,
+    // 2단계: Supabase Edge Function 호출 (AI 요약 생성)
+    console.log('📊 2단계: Supabase Edge Function 호출 (AI 요약 생성)')
+    
+    const edgeFunctionUrl = 'https://hvmdwkugpvqigpfdfrvz.supabase.co/functions/v1/process-video'
+    const edgeResponse = await fetch(edgeFunctionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        batchVideoId,
         transcript,
+        videoId,
         title,
-        channel_id: channelId,
-        channel_name: channelName,
-        status: 'transcript_only',
-        source: 'batch'
+        videoUrl,
+        channelId: channelId || 'unknown',
+        channelName: channelName || 'unknown'
       })
-      .select()
-      .single()
+    })
     
-    if (insertError) throw insertError
-    
-    const analysisId = newAnalysis.id
-    console.log(`💾 분석 결과 저장 완료 (ID: ${analysisId})`)
-    
-    // Rate Limit 방지
-    console.log(`⏳ 65초 대기 중... (Rate Limit 방지)`)
-    await new Promise(resolve => setTimeout(resolve, 65000))
-    
-    // 2단계: 요약 생성
-    console.log('📊 2단계 시작: AI 요약 보고서 생성')
-    const summary = await generateSummaryWithGemini(transcript, geminiApiKey, title)
-    
-    if (!summary) {
-      await supabase
-        .from('analyses')
-        .update({ status: 'failed' })
-        .eq('id', analysisId)
-      
-      await supabase
-        .from('batch_videos')
-        .update({ 
-          status: 'failed',
-          analysis_id: analysisId,
-          error_message: '요약 생성 실패',
-          finished_at: new Date().toISOString()
-        })
-        .eq('id', batchVideoId)
-      
-      return { success: false, error: '요약 생성 실패' }
+    if (!edgeResponse.ok) {
+      const errorData = await edgeResponse.json()
+      throw new Error(`Edge Function 오류: ${errorData.error || edgeResponse.statusText}`)
     }
     
-    // 요약 저장
-    await supabase
-      .from('analyses')
-      .update({ summary, status: 'completed' })
-      .eq('id', analysisId)
+    const edgeResult = await edgeResponse.json()
     
-    console.log('✅ 보고서 생성 완료')
+    if (!edgeResult.success) {
+      throw new Error('Edge Function에서 요약 생성 실패')
+    }
     
-    // batch_videos 업데이트
-    await supabase
-      .from('batch_videos')
-      .update({ 
-        status: 'completed',
-        analysis_id: analysisId,
-        finished_at: new Date().toISOString()
-      })
-      .eq('id', batchVideoId)
+    console.log(`✅ AI 요약 완료 (${edgeResult.summaryLength}자)`)
     
     // batch_jobs 카운터 업데이트
     const { data: batchVideo } = await supabase
@@ -2396,7 +2363,11 @@ async function processVideoAnalysisSupabase(
     
     console.log(`✅ 영상 분석 완료: ${title}\n`)
     
-    return { success: true, analysisId, summary }
+    return { 
+      success: true, 
+      analysisId: edgeResult.analysisId, 
+      summaryLength: edgeResult.summaryLength 
+    }
     
   } catch (error: any) {
     console.error('❌ 영상 분석 오류:', error)
@@ -2410,6 +2381,26 @@ async function processVideoAnalysisSupabase(
         finished_at: new Date().toISOString()
       })
       .eq('id', batchVideoId)
+    
+    // failed_videos 증가
+    const { data: batchVideo } = await supabase
+      .from('batch_videos')
+      .select('batch_id')
+      .eq('id', batchVideoId)
+      .single()
+    
+    if (batchVideo) {
+      const { data: currentBatch } = await supabase
+        .from('batch_jobs')
+        .select('failed_videos')
+        .eq('id', batchVideo.batch_id)
+        .single()
+      
+      await supabase
+        .from('batch_jobs')
+        .update({ failed_videos: (currentBatch?.failed_videos || 0) + 1 })
+        .eq('id', batchVideo.batch_id)
+    }
     
     return { success: false, error: error.message }
   }

@@ -1,5 +1,5 @@
-// Supabase Edge Function: 영상 분석 처리
-// Cloudflare Workers CPU 제한 우회용
+// Supabase Edge Function: AI 요약 생성 전용
+// Cloudflare Pages에서 대본 추출 → Edge Function에서 AI 요약만 처리
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -9,50 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// YouTube 대본 추출
-async function getYouTubeTranscript(videoId: string): Promise<string | null> {
-  try {
-    const url = `https://www.youtube.com/watch?v=${videoId}`
-    const response = await fetch(url)
-    const html = await response.text()
-    
-    const captionsRegex = /"captions":\{"playerCaptionsTracklistRenderer":\{"captionTracks":\[([^\]]+)\]/
-    const match = html.match(captionsRegex)
-    
-    if (!match) {
-      console.log('❌ 자막 정보 없음')
-      return null
-    }
-    
-    const captionUrl = match[1].match(/"baseUrl":"([^"]+)"/)?.[1]
-    if (!captionUrl) return null
-    
-    const decodedUrl = captionUrl.replace(/\\u0026/g, '&')
-    const captionResponse = await fetch(decodedUrl)
-    const captionXml = await captionResponse.text()
-    
-    const textRegex = /<text[^>]*>([^<]+)<\/text>/g
-    const texts: string[] = []
-    let textMatch
-    
-    while ((textMatch = textRegex.exec(captionXml)) !== null) {
-      const decodedText = textMatch[1]
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-      texts.push(decodedText)
-    }
-    
-    const transcript = texts.join(' ').trim()
-    console.log(`✅ 대본 추출 성공 (${transcript.length}자)`)
-    return transcript
-  } catch (error) {
-    console.error('❌ YouTube 대본 추출 실패:', error)
-    return null
-  }
-}
+// YouTube 대본 추출 함수 제거 (Cloudflare Pages에서 처리)
 
 // Gemini API로 요약 생성
 async function generateSummary(transcript: string, apiKey: string, videoTitle?: string): Promise<string | null> {
@@ -135,60 +92,25 @@ serve(async (req) => {
     
     const supabase = createClient(supabaseUrl, supabaseKey)
     
-    const { batchVideoId } = await req.json()
+    const { batchVideoId, transcript, videoId, title, videoUrl, channelId, channelName } = await req.json()
     
-    if (!batchVideoId) {
+    // 필수 파라미터 검증
+    if (!batchVideoId || !transcript || !videoId || !title) {
       return new Response(
-        JSON.stringify({ error: 'batchVideoId required' }),
+        JSON.stringify({ error: 'batchVideoId, transcript, videoId, title required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
     
-    console.log(`🎬 배치 ID ${batchVideoId} 처리 시작`)
+    console.log(`🎬 배치 ID ${batchVideoId} AI 요약 생성 시작`)
+    console.log(`📹 ${title} (대본 길이: ${transcript.length}자)`)
     
-    const { data: batchVideo, error: batchError } = await supabase
-      .from('batch_videos')
-      .select('*')
-      .eq('id', batchVideoId)
-      .single()
-    
-    if (batchError || !batchVideo) {
-      return new Response(
-        JSON.stringify({ error: '배치 영상 없음' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-    
-    const { video_id: videoId, title, url: videoUrl, channel_id: channelId, channel_name: channelName } = batchVideo
-    
-    console.log(`📹 ${title}`)
-    
-    // 대본 추출
-    const transcript = await getYouTubeTranscript(videoId)
-    
-    if (!transcript) {
-      await supabase
-        .from('batch_videos')
-        .update({ 
-          status: 'failed',
-          error_message: '대본 추출 실패',
-          finished_at: new Date().toISOString()
-        })
-        .eq('id', batchVideoId)
-      
-      return new Response(
-        JSON.stringify({ error: '대본 추출 실패' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-    
-    // 대본 저장
+    // 대본 저장 (Cloudflare에서 이미 추출됨)
     const { data: analysis, error: analysisError } = await supabase
       .from('analyses')
       .insert({
         video_id: videoId,
         channel_id: channelId,
-        channel_name: channelName,
         title,
         url: videoUrl,
         transcript,
@@ -252,17 +174,7 @@ serve(async (req) => {
       })
       .eq('id', batchVideoId)
     
-    // batch_jobs 카운터 업데이트
-    const { data: currentBatch } = await supabase
-      .from('batch_jobs')
-      .select('completed_videos')
-      .eq('id', batchVideo.batch_id)
-      .single()
-    
-    await supabase
-      .from('batch_jobs')
-      .update({ completed_videos: (currentBatch?.completed_videos || 0) + 1 })
-      .eq('id', batchVideo.batch_id)
+    // batch_jobs 카운터는 Cloudflare Pages에서 업데이트
     
     console.log(`✅ 완료: ${title}`)
     
