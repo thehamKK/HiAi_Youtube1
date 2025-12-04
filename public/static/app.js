@@ -8,6 +8,7 @@ let currentBatch = null;
 
 async function analyzeVideo() {
     const videoUrl = document.getElementById('videoUrl').value.trim();
+    const processingMethod = document.querySelector('input[name="processingMethod"]:checked')?.value || 'cloudflare';
     
     if (!videoUrl) {
         showError('YouTube URL을 입력해주세요.');
@@ -23,13 +24,29 @@ async function analyzeVideo() {
     analyzeBtn.classList.add('opacity-50', 'cursor-not-allowed');
     
     try {
+        // 처리 방식에 따른 메시지
+        let methodName = '';
+        let timeout = 600000; // 기본 10분
+        
+        if (processingMethod === 'cloudflare') {
+            methodName = 'Cloudflare Workers (샌드박스 성공 방식)';
+            timeout = 600000; // 10분
+        } else if (processingMethod === 'supabase') {
+            methodName = 'Supabase Edge Function';
+            timeout = 150000; // 2.5분
+        } else if (processingMethod === 'assemblyai') {
+            methodName = 'AssemblyAI STT';
+            timeout = 300000; // 5분
+        }
+        
         // 1단계: 대본 추출
-        showLoading('1단계: 대본 추출 중... (최대 10분 소요)');
+        showLoading(`1단계: 대본 추출 중... (${methodName})`);
         
         const stage1Response = await axios.post('/api/analyze/transcript', {
-            videoUrl
+            videoUrl,
+            processingMethod  // 처리 방식 전달
         }, {
-            timeout: 600000  // 10분
+            timeout: timeout
         });
         
         if (!stage1Response.data.success) {

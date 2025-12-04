@@ -765,11 +765,13 @@ async function processVideoAnalysis(
 // 1단계: 대본 추출
 app.post('/api/analyze/transcript', async (c) => {
   const { env } = c
-  const { videoUrl } = await c.req.json()
+  const { videoUrl, processingMethod = 'cloudflare' } = await c.req.json()
   
   if (!videoUrl) {
     return c.json({ error: '영상 URL이 필요합니다.' }, 400)
   }
+  
+  console.log(`🎯 처리 방식: ${processingMethod}`)
   
   if (!env.DB) {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
@@ -1544,6 +1546,76 @@ app.get('/', (c) => {
                     <i class="fas fa-play-circle mr-3 text-orange-600"></i>
                     YouTube 영상 분석
                 </h2>
+                
+                <!-- 처리 방식 선택 -->
+                <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-3 flex items-center">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        처리 방식 선택
+                    </h3>
+                    <div class="space-y-3">
+                        <!-- 방식 1: Cloudflare Workers (샌드박스 성공 방식) -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors">
+                            <input 
+                                type="radio" 
+                                name="processingMethod" 
+                                value="cloudflare" 
+                                checked
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">Cloudflare Workers</span>
+                                    <span class="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-semibold rounded-full">추천</span>
+                                    <span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">무료</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    샌드박스 성공 방식 • 타임아웃 제한 없음 • 70-80% 성공률 • 처리 시간: 60~600초
+                                </p>
+                            </div>
+                        </label>
+                        
+                        <!-- 방식 2: Supabase Edge Function (현재 방식) -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors">
+                            <input 
+                                type="radio" 
+                                name="processingMethod" 
+                                value="supabase"
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">Supabase Edge Function</span>
+                                    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs font-semibold rounded-full">제한적</span>
+                                    <span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">무료</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    150초 타임아웃 • 자막 있는 영상만 처리 가능 • 10-20% 성공률
+                                </p>
+                            </div>
+                        </label>
+                        
+                        <!-- 방식 3: AssemblyAI STT (유료) -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors">
+                            <input 
+                                type="radio" 
+                                name="processingMethod" 
+                                value="assemblyai"
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">AssemblyAI STT</span>
+                                    <span class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-semibold rounded-full">고품질</span>
+                                    <span class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-semibold rounded-full">유료</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    100% 성공률 • 자막 없는 영상도 처리 • 비용: $0.15/시간 • 150초 내 처리
+                                </p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
                 
                 <div class="space-y-4">
                     <input 
