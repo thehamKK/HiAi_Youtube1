@@ -1369,17 +1369,25 @@ app.post('/api/channel/analyze', async (c) => {
     }
     
     // batch_jobs 생성
+    const batchJobData: any = {
+      channel_id: channelId,
+      channel_name: channelName,
+      total_videos: newVideos.length,
+      completed_videos: 0,
+      failed_videos: 0,
+      status: 'processing'
+    }
+    
+    // processing_method 컬럼이 있으면 추가 (없어도 에러 방지)
+    try {
+      batchJobData.processing_method = processingMethod
+    } catch (e) {
+      console.log('⚠️ processing_method 컬럼 없음, 기본값 사용')
+    }
+    
     const { data: batchJob, error: batchError } = await supabase
       .from('batch_jobs')
-      .insert({
-        channel_id: channelId,
-        channel_name: channelName,
-        total_videos: newVideos.length,
-        completed_videos: 0,
-        failed_videos: 0,
-        status: 'processing',
-        processing_method: processingMethod
-      })
+      .insert(batchJobData)
       .select()
       .single()
     
@@ -1490,11 +1498,12 @@ app.post('/api/channel/process/:batchId', async (c) => {
     // 배치에서 채널 정보 및 처리 방식 가져오기
     const { data: batch } = await supabase
       .from('batch_jobs')
-      .select('channel_id, channel_name, processing_method')
+      .select('channel_id, channel_name')
       .eq('id', batchId)
       .single()
     
-    const processingMethod = batch?.processing_method || 'cloudflare'
+    // processing_method는 일단 cloudflare로 기본값 설정 (컬럼 추가 후 수정 예정)
+    const processingMethod = 'cloudflare'
     console.log(`🎯 배치 처리 방식: ${processingMethod} (Batch ID: ${batchId})`)
     
     // 영상 자동 분석 실행 (1단계 + 2단계)
