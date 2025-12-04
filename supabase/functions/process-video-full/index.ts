@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// YouTube 대본 추출 (Gemini 1.5 Flash로 오디오 직접 분석)
+// YouTube 대본 추출 (샌드박스 성공 로직 완전 이식)
 async function getYouTubeTranscript(videoId: string, apiKey: string): Promise<string | null> {
   try {
     // 1단계: 기존 방법 시도 (자막 추출 - 빠름)
@@ -46,49 +46,140 @@ async function getYouTubeTranscript(videoId: string, apiKey: string): Promise<st
       }
     }
     
-    // 2단계: Gemini로 영상 직접 분석 (YouTube URL 지원!)
+    // 2단계: Gemini로 영상 직접 분석 (샌드박스 성공 방식 - 10회 재시도 + 10분 타임아웃)
     console.log('🎙️ Gemini로 YouTube 영상 직접 분석 시도...')
     
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+    const maxRetries = 10
+    let attempt = 0
     
-    const geminiResponse = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            {
-              text: "이 YouTube 영상의 전체 대본을 추출해주세요. 영상에서 말하는 모든 내용을 그대로 텍스트로 변환하세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다."
-            },
-            {
-              fileData: {
-                fileUri: `https://www.youtube.com/watch?v=${videoId}`
+    while (attempt < maxRetries) {
+      attempt++
+      
+      try {
+        console.log(`🔵 Gemini API 호출 시작 (시도 ${attempt}/${maxRetries})`)
+        const startTime = Date.now()
+        
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+        
+        const requestBody = {
+          contents: [{
+            parts: [
+              { text: "이 YouTube 영상의 전체 대본을 추출해주세요. 영상에서 말하는 모든 내용을 그대로 텍스트로 변환하세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다." },
+              { 
+                fileData: {
+                  mimeType: "video/youtube",  // 샌드박스 성공 방식 (공식 문서와 다르지만 작동함)
+                  fileUri: videoUrl
+                }
+              }
+            ]
+          }]
+        }
+        
+        console.log('📤 Gemini API 요청 전송 중...')
+        
+        // 10분 타임아웃 설정
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => {
+          console.log('⏰ Gemini API 타임아웃 (10분 초과)')
+          controller.abort()
+        }, 10 * 60 * 1000) // 10분
+        
+        try {
+          const geminiResponse = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal
+          })
+          
+          clearTimeout(timeoutId)
+          console.log(`📥 Gemini API 응답 수신: ${geminiResponse.status}`)
+          
+          const data = await geminiResponse.json()
+          
+          const elapsed = Math.round((Date.now() - startTime) / 1000)
+          console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+          
+          // 503 과부하 에러 또는 429 Rate Limit 에러 - 재시도
+          if (geminiResponse.status === 503 || geminiResponse.status === 429) {
+            const waitTime = attempt * 30 // 30초, 60초, 90초...
+            console.log(`⚠️ Gemini API 과부하/Rate Limit (${geminiResponse.status}). ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+            
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+              continue // 재시도
+            } else {
+              console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 포기`)
+              return null
+            }
+          }
+          
+          if (data.error) {
+            console.error('❌ Gemini API 에러:', data.error.message)
+            
+            // 과부하 메시지가 포함된 경우 재시도
+            if (data.error.message.includes('overloaded') || data.error.message.includes('quota')) {
+              const waitTime = attempt * 30
+              console.log(`⚠️ Gemini 과부하 메시지 감지. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+              
+              if (attempt < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+                continue // 재시도
               }
             }
-          ]
-        }]
-      })
-    })
-    
-    const data = await geminiResponse.json()
-    
-    if (data.error) {
-      console.error('❌ Gemini 에러:', data.error.message)
-      return null
-    }
-    
-    if (data.candidates?.[0]?.content?.parts) {
-      const transcript = data.candidates[0].content.parts[0].text
-      if (transcript && transcript.length > 100) {
-        console.log(`✅ Gemini YouTube 분석 성공 (${transcript.length}자)`)
-        return transcript
+            
+            return null
+          }
+          
+          if (data.candidates?.[0]?.content?.parts) {
+            const transcript = data.candidates[0].content.parts[0].text
+            if (transcript && transcript.length > 100) {
+              console.log(`✅ Gemini YouTube 분석 성공 (${transcript.length}자, ${elapsed}초, 시도 ${attempt}회)`)
+              return transcript
+            }
+          }
+          
+          console.log('⚠️ Gemini API 응답에 대본 없음')
+          return null
+          
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId)
+          
+          if (fetchError.name === 'AbortError') {
+            console.error('❌ Gemini API 타임아웃 (10분 초과)')
+            
+            if (attempt < maxRetries) {
+              console.log(`⏳ 타임아웃 후 30초 대기 후 재시도 (${attempt}/${maxRetries})`)
+              await new Promise(resolve => setTimeout(resolve, 30000))
+              continue // 재시도
+            } else {
+              return null
+            }
+          }
+          
+          throw fetchError
+        }
+        
+      } catch (attemptError: any) {
+        console.error(`❌ 시도 ${attempt} 실패:`, attemptError.message)
+        
+        if (attempt < maxRetries) {
+          const waitTime = attempt * 30
+          console.log(`⏳ ${waitTime}초 후 재시도...`)
+          await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+          continue
+        } else {
+          console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달`)
+          return null
+        }
       }
     }
     
-    console.log('❌ 대본 추출 실패')
+    console.log('❌ 대본 추출 실패 (모든 재시도 소진)')
     return null
+    
   } catch (error) {
-    console.error('대본 추출 오류:', error)
+    console.error('대본 추출 전체 오류:', error)
     return null
   }
 }
