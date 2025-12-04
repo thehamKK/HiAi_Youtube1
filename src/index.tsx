@@ -2340,11 +2340,11 @@ async function processVideoAnalysisSupabase(
   try {
     console.log(`\n🎬 배치 영상 분석 시작: ${title}`)
     
-    // Supabase Edge Function 호출 (Fire-and-Forget - 전체 처리를 Edge Function에서)
+    // Supabase Edge Function 호출 (동기 처리 - 완료될 때까지 대기)
     const edgeFunctionUrl = 'https://hvmdwkugpvqigpfdfrvz.supabase.co/functions/v1/process-video-full'
     
-    // 🔥 Fire-and-Forget: 응답을 기다리지 않고 즉시 반환
-    fetch(edgeFunctionUrl, {
+    // ✅ 동기 처리: Edge Function이 완료될 때까지 대기
+    const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2358,18 +2358,18 @@ async function processVideoAnalysisSupabase(
         channelId: channelId || 'unknown',
         channelName: channelName || 'unknown'
       })
-    }).catch(error => {
-      console.error(`Edge Function 호출 실패 (백그라운드): ${error.message}`)
     })
     
-    console.log(`✅ Edge Function 호출 완료 (백그라운드 처리 중)`)
-    console.log(`📝 영상: ${title}`)
+    const edgeResult = await response.json()
     
-    // 즉시 성공 응답 반환 (실제 처리는 Edge Function에서 백그라운드로 수행)
+    console.log(`✅ Edge Function 완료: ${title}`)
+    console.log(`📊 결과: ${edgeResult.success ? '성공' : '실패'}`)
+    
     return { 
-      success: true, 
-      message: 'Edge Function 호출 완료 (백그라운드 처리 중)',
-      batchVideoId
+      success: edgeResult.success, 
+      message: edgeResult.message || '처리 완료',
+      batchVideoId,
+      edgeResult
     }
     
   } catch (error: any) {

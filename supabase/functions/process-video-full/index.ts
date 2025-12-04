@@ -7,9 +7,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// YouTube 대본 추출
-async function getYouTubeTranscript(videoId: string): Promise<string | null> {
+// YouTube 대본 추출 (Gemini 1.5 Flash로 오디오 직접 분석)
+async function getYouTubeTranscript(videoId: string, apiKey: string): Promise<string | null> {
   try {
+    // 1단계: 기존 방법 시도 (자막 추출 - 빠름)
+    console.log('🎬 자막 추출 시도...')
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
     const response = await fetch(videoUrl, {
       headers: {
@@ -20,29 +22,72 @@ async function getYouTubeTranscript(videoId: string): Promise<string | null> {
     const html = await response.text()
     const captionMatch = html.match(/"captionTracks":(\[.*?\])/)?.[1]
     
-    if (!captionMatch) {
-      console.log('자막 정보 없음')
+    if (captionMatch) {
+      const captions = JSON.parse(captionMatch)
+      if (captions && captions.length > 0) {
+        const captionUrl = captions[0].baseUrl
+        const captionResponse = await fetch(captionUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        })
+        
+        const captionXml = await captionResponse.text()
+        const textMatches = captionXml.matchAll(/<text[^>]*>(.*?)<\/text>/g)
+        
+        const transcript = Array.from(textMatches)
+          .map(match => match[1].replace(/&amp;#39;/g, "'").replace(/&amp;quot;/g, '"').replace(/&amp;/g, '&'))
+          .join(' ')
+        
+        if (transcript && transcript.length > 100) {
+          console.log('✅ 자막 추출 성공')
+          return transcript
+        }
+      }
+    }
+    
+    // 2단계: Gemini로 영상 직접 분석 (YouTube URL 지원!)
+    console.log('🎙️ Gemini로 YouTube 영상 직접 분석 시도...')
+    
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+    
+    const geminiResponse = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              text: "이 YouTube 영상의 전체 대본을 추출해주세요. 영상에서 말하는 모든 내용을 그대로 텍스트로 변환하세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다."
+            },
+            {
+              fileData: {
+                mimeType: "video/youtube",
+                fileUri: `https://www.youtube.com/watch?v=${videoId}`
+              }
+            }
+          ]
+        }]
+      })
+    })
+    
+    const data = await geminiResponse.json()
+    
+    if (data.error) {
+      console.error('❌ Gemini 에러:', data.error.message)
       return null
     }
     
-    const captions = JSON.parse(captionMatch)
-    if (!captions || captions.length === 0) return null
-    
-    const captionUrl = captions[0].baseUrl
-    const captionResponse = await fetch(captionUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    if (data.candidates?.[0]?.content?.parts) {
+      const transcript = data.candidates[0].content.parts[0].text
+      if (transcript && transcript.length > 100) {
+        console.log(`✅ Gemini YouTube 분석 성공 (${transcript.length}자)`)
+        return transcript
       }
-    })
+    }
     
-    const captionXml = await captionResponse.text()
-    const textMatches = captionXml.matchAll(/<text[^>]*>(.*?)<\/text>/g)
-    
-    const transcript = Array.from(textMatches)
-      .map(match => match[1].replace(/&amp;#39;/g, "'").replace(/&amp;quot;/g, '"').replace(/&amp;/g, '&'))
-      .join(' ')
-    
-    return transcript || null
+    console.log('❌ 대본 추출 실패')
+    return null
   } catch (error) {
     console.error('대본 추출 오류:', error)
     return null
@@ -130,7 +175,7 @@ serve(async (req) => {
     
     const supabase = createClient(supabaseUrl, supabaseKey)
     
-    const { batchVideoId, videoId, title, videoUrl, channelId } = await req.json()
+    const { batchVideoId, videoId, title, videoUrl, channelId, channelName } = await req.json()
     
     // 필수 파라미터 검증
     if (!batchVideoId || !videoId || !title) {
@@ -144,7 +189,7 @@ serve(async (req) => {
     console.log(`📹 ${title}`)
     
     // 1단계: YouTube 대본 추출
-    const transcript = await getYouTubeTranscript(videoId)
+    const transcript = await getYouTubeTranscript(videoId, geminiApiKey)
     
     if (!transcript) {
       await supabase
@@ -170,6 +215,7 @@ serve(async (req) => {
       .insert({
         video_id: videoId,
         channel_id: channelId,
+        channel_name: channelName,
         title,
         url: videoUrl,
         transcript,
