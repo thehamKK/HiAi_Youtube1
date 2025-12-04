@@ -62,7 +62,6 @@ async function getYouTubeTranscript(videoId: string, apiKey: string): Promise<st
             },
             {
               fileData: {
-                mimeType: "video/youtube",
                 fileUri: `https://www.youtube.com/watch?v=${videoId}`
               }
             }
