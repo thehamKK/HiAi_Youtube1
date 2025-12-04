@@ -1508,7 +1508,8 @@ app.post('/api/channel/process/:batchId', async (c) => {
       batch?.channel_name as string | null,
       null,
       env.GEMINI_API_KEY,
-      env.SUPABASE_SECRET_KEY
+      env.SUPABASE_SECRET_KEY,
+      processingMethod  // 처리 방식 전달
     )
     
     return c.json({
@@ -2844,46 +2845,197 @@ async function processVideoAnalysisSupabase(
   channelName: string | null,
   uploadDate: string | null,
   geminiApiKey: string,
-  supabaseKey: string
+  supabaseKey: string,
+  processingMethod: string = 'cloudflare'
 ): Promise<any> {
   try {
-    console.log(`\n🎬 배치 영상 분석 시작: ${title}`)
+    console.log(`\n🎬 배치 영상 분석 시작: ${title} (방식: ${processingMethod})`)
     
-    // Supabase Edge Function 호출 (동기 처리 - 완료될 때까지 대기)
-    const edgeFunctionUrl = 'https://hvmdwkugpvqigpfdfrvz.supabase.co/functions/v1/process-video-full'
-    
-    // ✅ 동기 처리: Edge Function이 완료될 때까지 대기
-    const response = await fetch(edgeFunctionUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${supabaseKey}`
-      },
-      body: JSON.stringify({
+    if (processingMethod === 'cloudflare') {
+      // ✅ Cloudflare Workers 방식: 직접 대본 추출 + 요약 생성
+      console.log('🚀 Cloudflare Workers 방식으로 처리')
+      
+      // 1단계: 대본 추출
+      let transcript: string | null = null
+      
+      // 먼저 YouTube 자막 시도
+      transcript = await extractTranscriptFromYouTube(videoId)
+      
+      if (transcript) {
+        console.log(`✅ YouTube 자막으로 대본 추출 성공: ${transcript.length}자`)
+      } else {
+        // 자막 없으면 Gemini API 사용 (10회 재시도)
+        console.log('⚠️ YouTube 자막 없음, Gemini API 시도 (10회 재시도)...')
+        const transcriptResult = await extractTranscriptWithGeminiCloudflare(videoUrl, geminiApiKey)
+        
+        if (!transcriptResult) {
+          // 대본 추출 실패 - batch_videos 업데이트
+          await supabase
+            .from('batch_videos')
+            .update({ 
+              status: 'failed',
+              error: '대본 추출 실패',
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', batchVideoId)
+          
+          return { 
+            success: false, 
+            message: '대본 추출 실패 (YouTube 자막 없음 + Gemini 10회 재시도 실패)',
+            batchVideoId
+          }
+        }
+        
+        transcript = transcriptResult.transcript
+        console.log(`✅ Cloudflare Workers Gemini 분석 성공: ${transcript.length}자`)
+      }
+      
+      // 대본을 DB에 저장 (transcript_only 상태)
+      const { data: analysis, error: insertError } = await supabase
+        .from('analyses')
+        .insert({
+          video_id: videoId,
+          url: videoUrl,
+          transcript,
+          title,
+          channel_id: channelId,
+          channel_name: channelName,
+          upload_date: uploadDate,
+          status: 'transcript_only',
+          source: 'batch'
+        })
+        .select()
+        .single()
+      
+      if (insertError) {
+        console.error('❌ 대본 저장 실패:', insertError)
+        
+        await supabase
+          .from('batch_videos')
+          .update({ 
+            status: 'failed',
+            error: insertError.message,
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', batchVideoId)
+        
+        return { success: false, message: insertError.message, batchVideoId }
+      }
+      
+      console.log('📝 1단계 완료: 대본 저장 (transcript_only)')
+      
+      // 2단계: 요약 생성 (Cloudflare Workers 방식 - 10회 재시도)
+      console.log('📊 2단계 시작: 요약 생성 (10회 재시도)...')
+      const summary = await generateSummaryWithGeminiCloudflare(transcript, geminiApiKey, title)
+      
+      if (!summary) {
+        console.error('❌ 요약 생성 실패')
+        
+        await supabase
+          .from('batch_videos')
+          .update({ 
+            status: 'failed',
+            error: '요약 생성 실패',
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', batchVideoId)
+        
+        return { 
+          success: false, 
+          message: '요약 생성 실패 (Gemini 10회 재시도 실패)',
+          batchVideoId
+        }
+      }
+      
+      // 요약을 DB에 저장 (completed 상태)
+      await supabase
+        .from('analyses')
+        .update({
+          summary,
+          status: 'completed'
+        })
+        .eq('id', analysis.id)
+      
+      console.log(`✅ 2단계 완료: 요약 생성 성공 (${summary.length}자)`)
+      
+      // batch_videos를 completed로 업데이트
+      await supabase
+        .from('batch_videos')
+        .update({ 
+          status: 'completed',
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', batchVideoId)
+      
+      return { 
+        success: true, 
+        message: '처리 완료 (Cloudflare Workers)',
         batchVideoId,
-        videoId,
-        title,
-        videoUrl,
-        channelId: channelId || 'unknown',
-        channelName: channelName || 'unknown'
+        transcriptLength: transcript.length,
+        summaryLength: summary.length
+      }
+      
+    } else if (processingMethod === 'supabase') {
+      // ✅ Supabase Edge Function 방식 (기존 로직)
+      console.log('⚡ Supabase Edge Function 방식으로 처리')
+      
+      const edgeFunctionUrl = 'https://hvmdwkugpvqigpfdfrvz.supabase.co/functions/v1/process-video-full'
+      
+      const response = await fetch(edgeFunctionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseKey}`
+        },
+        body: JSON.stringify({
+          batchVideoId,
+          videoId,
+          title,
+          videoUrl,
+          channelId: channelId || 'unknown',
+          channelName: channelName || 'unknown'
+        })
       })
-    })
-    
-    const edgeResult = await response.json()
-    
-    console.log(`✅ Edge Function 완료: ${title}`)
-    console.log(`📊 결과: ${edgeResult.success ? '성공' : '실패'}`)
-    
-    return { 
-      success: edgeResult.success, 
-      message: edgeResult.message || '처리 완료',
-      batchVideoId,
-      edgeResult
+      
+      const edgeResult = await response.json()
+      
+      console.log(`✅ Edge Function 완료: ${title}`)
+      console.log(`📊 결과: ${edgeResult.success ? '성공' : '실패'}`)
+      
+      return { 
+        success: edgeResult.success, 
+        message: edgeResult.message || '처리 완료',
+        batchVideoId,
+        edgeResult
+      }
+      
+    } else {
+      // AssemblyAI STT는 준비 중
+      return { 
+        success: false, 
+        message: 'AssemblyAI STT는 준비 중입니다.',
+        batchVideoId
+      }
     }
     
   } catch (error: any) {
     console.error('❌ 영상 분석 오류:', error)
-    return { success: false, error: error.message }
+    
+    // 에러 발생 시 batch_videos를 failed로 업데이트
+    try {
+      await supabase
+        .from('batch_videos')
+        .update({ 
+          status: 'failed',
+          error: error.message,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', batchVideoId)
+    } catch (updateError) {
+      console.error('❌ 상태 업데이트 실패:', updateError)
+    }
+    
+    return { success: false, error: error.message, batchVideoId }
   }
 }
 
