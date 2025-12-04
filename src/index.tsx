@@ -1368,28 +1368,22 @@ app.post('/api/channel/analyze', async (c) => {
       })
     }
     
-    // batch_jobs 생성
-    const batchJobData: any = {
-      channel_id: channelId,
-      channel_name: channelName,
-      total_videos: newVideos.length,
-      completed_videos: 0,
-      failed_videos: 0,
-      status: 'processing'
-    }
-    
-    // processing_method 컬럼이 있으면 추가 (없어도 에러 방지)
-    try {
-      batchJobData.processing_method = processingMethod
-    } catch (e) {
-      console.log('⚠️ processing_method 컬럼 없음, 기본값 사용')
-    }
-    
+    // batch_jobs 생성 (processing_method는 일단 제외, 컬럼 추가 후 사용)
     const { data: batchJob, error: batchError } = await supabase
       .from('batch_jobs')
-      .insert(batchJobData)
+      .insert({
+        channel_id: channelId,
+        channel_name: channelName,
+        total_videos: newVideos.length,
+        completed_videos: 0,
+        failed_videos: 0,
+        status: 'processing'
+      })
       .select()
       .single()
+    
+    // TODO: Supabase에 processing_method 컬럼 추가 후 활성화
+    console.log(`🎯 채널 처리 방식: ${processingMethod} (일단 모든 배치는 cloudflare 방식 사용)`)
     
     if (batchError) throw batchError
     
