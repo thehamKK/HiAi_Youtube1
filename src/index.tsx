@@ -1081,7 +1081,7 @@ app.post('/api/channel/process/:batchId', async (c) => {
   const { env } = c
   const batchId = parseInt(c.req.param('batchId'))
   
-  if (!env.DB || !env.GEMINI_API_KEY) {
+  if (!env.GEMINI_API_KEY || !env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) {
     return c.json({ error: '필수 설정이 누락되었습니다.' }, 500)
   }
   
