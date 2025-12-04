@@ -32,6 +32,235 @@ function extractVideoId(url: string): string | null {
   return null
 }
 
+// ==================== Cloudflare Workers 방식 (샌드박스 성공 코드) ====================
+
+// Cloudflare Workers: Gemini API로 YouTube 영상 대본 추출 (10회 재시도 + 10분 타임아웃)
+async function extractTranscriptWithGeminiCloudflare(
+  videoUrl: string, 
+  apiKey: string, 
+  maxRetries: number = 10
+): Promise<{ transcript: string, title?: string, uploadDate?: string } | null> {
+  let attempt = 0
+  
+  while (attempt < maxRetries) {
+    attempt++
+    
+    try {
+      console.log(`🔵 Gemini API 호출 시작 (시도 ${attempt}/${maxRetries}): ${videoUrl}`)
+      const startTime = Date.now()
+      
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+      
+      const requestBody = {
+        contents: [{
+          parts: [
+            { text: "이 YouTube 영상의 전체 대본을 추출해주세요. 대본만 텍스트로 제공하고, 다른 설명은 불필요합니다." },
+            { 
+              fileData: {
+                mimeType: "video/youtube",  // 샌드박스 성공 방식
+                fileUri: videoUrl
+              }
+            }
+          ]
+        }]
+      }
+      
+      console.log('📤 Gemini API 요청 전송 중...')
+      
+      // 10분 타임아웃 설정
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ Gemini API 타임아웃 (10분 초과)')
+        controller.abort()
+      }, 10 * 60 * 1000) // 10분
+      
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        })
+        
+        clearTimeout(timeoutId)
+        console.log(`📥 Gemini API 응답 수신: ${response.status}`)
+        
+        const data = await response.json()
+        
+        const elapsed = Math.round((Date.now() - startTime) / 1000)
+        console.log(`⏱️  Gemini API 소요 시간: ${elapsed}초`)
+        
+        // 503 과부하 에러 또는 429 Rate Limit 에러 - 재시도
+        if (response.status === 503 || response.status === 429) {
+          const waitTime = attempt * 30 // 30초, 60초, 90초...
+          console.log(`⚠️ Gemini API 과부하/Rate Limit (${response.status}). ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+          
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+            continue // 재시도
+          } else {
+            console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 포기`)
+            return null
+          }
+        }
+        
+        if (data.error) {
+          console.error('❌ Gemini API 에러:', data.error.message)
+          
+          // 과부하 메시지가 포함된 경우 재시도
+          if (data.error.message.includes('overloaded') || data.error.message.includes('quota')) {
+            const waitTime = attempt * 30
+            console.log(`⚠️ Gemini 과부하 메시지 감지. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+            
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+              continue // 재시도
+            }
+          }
+          
+          return null
+        }
+        
+        if (data.candidates && data.candidates[0]?.content?.parts) {
+          const transcript = data.candidates[0].content.parts[0].text
+          console.log(`✅ 대본 추출 성공: ${transcript.length}자 (${elapsed}초, 시도 ${attempt}회)`)
+          return { transcript }
+        }
+        
+        console.log('⚠️ Gemini API 응답에 대본 없음')
+        return null
+        
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId)
+        
+        if (fetchError.name === 'AbortError') {
+          console.error('❌ Gemini API 타임아웃 (10분 초과)')
+          
+          if (attempt < maxRetries) {
+            console.log(`⏳ 타임아웃 후 30초 대기 후 재시도 (${attempt}/${maxRetries})`)
+            await new Promise(resolve => setTimeout(resolve, 30000))
+            continue // 재시도
+          } else {
+            throw new Error('Gemini API 타임아웃: 10분 이내에 응답받지 못했습니다.')
+          }
+        }
+        
+        console.error('❌ Gemini API fetch 오류:', fetchError.message)
+        throw fetchError
+      }
+      
+    } catch (error: any) {
+      console.error(`❌ Gemini 대본 추출 실패 (시도 ${attempt}/${maxRetries}):`, error)
+      
+      if (attempt >= maxRetries) {
+        return null
+      }
+      
+      // 일반 에러도 재시도
+      const waitTime = attempt * 30
+      console.log(`⏳ ${waitTime}초 후 재시도...`)
+      await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+    }
+  }
+  
+  console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달. 완전 포기`)
+  return null
+}
+
+// Cloudflare Workers: Gemini API로 요약 생성 (10회 재시도)
+async function generateSummaryWithGeminiCloudflare(
+  transcript: string, 
+  apiKey: string, 
+  videoTitle?: string, 
+  maxRetries: number = 10
+): Promise<string | null> {
+  let attempt = 0
+  
+  while (attempt < maxRetries) {
+    attempt++
+    
+    try {
+      console.log(`📊 Gemini 요약 생성 시작 (시도 ${attempt}/${maxRetries})`)
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+      
+      const prompt = `다음은 YouTube 영상의 대본입니다${videoTitle ? ` (제목: ${videoTitle})` : ''}. 이 대본을 읽고 1페이지 분량의 요약 보고서를 작성해주세요.
+
+보고서 형식:
+1. 핵심 내용 요약 (3-5문장)
+2. 주요 포인트 (불릿 포인트 5-7개)
+3. 결론 및 시사점
+
+대본:
+${transcript}`
+      
+      const requestBody = {
+        contents: [{
+          parts: [{ text: prompt }]
+        }]
+      }
+      
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      })
+      
+      const data = await response.json()
+      
+      // 503 과부하 또는 429 Rate Limit - 재시도
+      if (response.status === 503 || response.status === 429) {
+        const waitTime = attempt * 30
+        console.log(`⚠️ Gemini 과부하/Rate Limit. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+          continue
+        } else {
+          return null
+        }
+      }
+      
+      if (data.error) {
+        console.error('❌ Gemini 요약 생성 에러:', data.error.message)
+        
+        if (data.error.message.includes('overloaded') || data.error.message.includes('quota')) {
+          const waitTime = attempt * 30
+          console.log(`⚠️ Gemini 과부하 감지. ${waitTime}초 후 재시도 (${attempt}/${maxRetries})`)
+          
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+            continue
+          }
+        }
+        
+        return null
+      }
+      
+      if (data.candidates && data.candidates[0]?.content?.parts) {
+        const summary = data.candidates[0].content.parts[0].text
+        console.log(`✅ 요약 생성 완료: ${summary.length}자`)
+        return summary
+      }
+      
+      return null
+      
+    } catch (error: any) {
+      console.error(`❌ 요약 생성 실패 (시도 ${attempt}/${maxRetries}):`, error)
+      
+      if (attempt >= maxRetries) {
+        return null
+      }
+      
+      const waitTime = attempt * 30
+      console.log(`⏳ ${waitTime}초 후 재시도...`)
+      await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
+    }
+  }
+  
+  console.error(`❌ 최대 재시도 횟수 ${maxRetries}회 도달`)
+  return null
+}
+
 // ==================== Google Drive 업로드 ====================
 
 // JWT 생성 (Google Service Account 인증용)
@@ -520,11 +749,51 @@ async function extractTranscriptWithGemini(videoUrl: string, apiKey: string, max
 // YouTube 자막 API 폴백
 async function extractTranscriptFromYouTube(videoId: string): Promise<string | null> {
   try {
-    // YouTube 자막 추출 로직 (여기서는 간소화)
-    console.log('YouTube 자막 API 시도:', videoId)
+    console.log('🎬 YouTube 자막 추출 시도:', videoId)
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
+    const response = await fetch(videoUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    })
+    
+    const html = await response.text()
+    const captionMatch = html.match(/"captionTracks":(\[.*?\])/)?.[1]
+    
+    if (captionMatch) {
+      const captions = JSON.parse(captionMatch)
+      if (captions && captions.length > 0) {
+        const captionUrl = captions[0].baseUrl
+        const captionResponse = await fetch(captionUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        })
+        
+        const captionXml = await captionResponse.text()
+        const textMatches = captionXml.matchAll(/<text[^>]*>(.*?)<\/text>/g)
+        
+        const transcript = Array.from(textMatches)
+          .map(match => match[1]
+            .replace(/&amp;#39;/g, "'")
+            .replace(/&amp;quot;/g, '"')
+            .replace(/&amp;/g, '&')
+            .replace(/&#39;/g, "'")
+            .replace(/&quot;/g, '"')
+          )
+          .join(' ')
+        
+        if (transcript && transcript.length > 100) {
+          console.log(`✅ YouTube 자막 추출 성공: ${transcript.length}자`)
+          return transcript
+        }
+      }
+    }
+    
+    console.log('⚠️ YouTube 자막 없음')
     return null
-  } catch (error) {
-    console.error('YouTube 자막 추출 실패:', error)
+  } catch (error: any) {
+    console.error('❌ YouTube 자막 추출 실패:', error.message)
     return null
   }
 }
@@ -800,29 +1069,119 @@ app.post('/api/analyze/transcript', async (c) => {
       }, 400)
     }
     
-    // YouTube 자막을 먼저 시도 (빠르고 안정적)
-    console.log('📝 1단계: 대본 추출 시작 (YouTube 자막 우선)')
-    let transcript: string | null = await extractTranscriptFromYouTube(videoId)
+    // 처리 방식에 따라 분기
+    console.log(`📝 1단계: 대본 추출 시작 (방식: ${processingMethod})`)
+    let transcript: string | null = null
     let title: string | undefined
     let uploadDate: string | undefined
     
-    if (transcript) {
-      console.log(`✅ YouTube 자막으로 대본 추출 성공: ${transcript.length}자`)
-    } else {
-      // YouTube 자막이 없으면 Gemini API 사용
-      console.log('⚠️ YouTube 자막 없음, Gemini API 시도...')
-      const transcriptResult = await extractTranscriptWithGemini(videoUrl, env.GEMINI_API_KEY)
+    if (processingMethod === 'cloudflare') {
+      // ✅ Cloudflare Workers 방식 (샌드박스 성공 코드)
+      console.log('🚀 Cloudflare Workers 방식: 10회 재시도 + 10분 타임아웃')
       
-      if (!transcriptResult) {
-        return c.json({
-          error: '대본 추출 실패',
-          details: 'YouTube 자막 없음\nGemini API도 실패 (과부하 또는 타임아웃)\n\n해결 방법:\n1. 자막이 있는 영상을 선택하거나\n2. 잠시 후 다시 시도해주세요 (Gemini API 과부하)\n3. 짧은 영상(10분 이하)을 먼저 시도해보세요'
-        }, 500)
+      // 먼저 YouTube 자막 시도
+      transcript = await extractTranscriptFromYouTube(videoId)
+      
+      if (transcript) {
+        console.log(`✅ YouTube 자막으로 대본 추출 성공: ${transcript.length}자`)
+      } else {
+        // 자막 없으면 Gemini API 사용 (샌드박스 성공 방식)
+        console.log('⚠️ YouTube 자막 없음, Gemini API 시도 (10회 재시도)...')
+        const transcriptResult = await extractTranscriptWithGeminiCloudflare(videoUrl, env.GEMINI_API_KEY)
+        
+        if (!transcriptResult) {
+          return c.json({
+            error: '대본 추출 실패',
+            details: 'YouTube 자막 없음\nGemini API도 10회 재시도 실패\n\n해결 방법:\n1. 자막이 있는 영상을 선택하거나\n2. 잠시 후 다시 시도해주세요'
+          }, 500)
+        }
+        transcript = transcriptResult.transcript
+        title = transcriptResult.title
+        uploadDate = transcriptResult.uploadDate
+        console.log(`✅ Cloudflare Workers Gemini 분석 성공: ${transcript.length}자`)
       }
-      transcript = transcriptResult.transcript
-      title = transcriptResult.title
-      uploadDate = transcriptResult.uploadDate
-      console.log(`✅ Gemini API로 대본 추출 성공: ${transcript.length}자`)
+      
+    } else if (processingMethod === 'supabase') {
+      // ✅ Supabase Edge Function 방식 (현재 방식)
+      console.log('⚡ Supabase Edge Function 방식: 150초 제한')
+      
+      // YouTube 자막 시도
+      transcript = await extractTranscriptFromYouTube(videoId)
+      
+      if (transcript) {
+        console.log(`✅ YouTube 자막으로 대본 추출 성공: ${transcript.length}자`)
+      } else {
+        // Supabase Edge Function 호출 (이미 배포된 함수 사용)
+        console.log('⚠️ YouTube 자막 없음, Supabase Edge Function 호출...')
+        
+        try {
+          const edgeFunctionUrl = `${env.SUPABASE_URL}/functions/v1/process-video-full`
+          const response = await fetch(edgeFunctionUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.SUPABASE_SECRET_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              batchVideoId: 0, // 단일 영상은 0
+              videoId,
+              title: 'Single Video',
+              videoUrl,
+              channelId: null,
+              channelName: null
+            })
+          })
+          
+          const result = await response.json()
+          
+          if (result.success && result.transcriptLength) {
+            // Edge Function에서 이미 DB에 저장했으므로 가져오기
+            const { data: analysis } = await supabase
+              .from('analyses')
+              .select('transcript, title')
+              .eq('video_id', videoId)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single()
+            
+            if (analysis) {
+              transcript = analysis.transcript
+              title = analysis.title
+              console.log(`✅ Supabase Edge Function 성공: ${transcript.length}자`)
+            }
+          } else {
+            return c.json({
+              error: '대본 추출 실패 (Supabase Edge Function)',
+              details: result.error || '150초 타임아웃 또는 처리 실패'
+            }, 500)
+          }
+        } catch (error: any) {
+          return c.json({
+            error: '대본 추출 실패 (Supabase Edge Function)',
+            details: error.message
+          }, 500)
+        }
+      }
+      
+    } else if (processingMethod === 'assemblyai') {
+      // ⏳ AssemblyAI STT 방식 (준비 중)
+      return c.json({
+        error: 'AssemblyAI STT 방식은 준비 중입니다.',
+        details: '현재 Cloudflare Workers 또는 Supabase 방식을 선택해주세요.'
+      }, 501)
+      
+    } else {
+      return c.json({
+        error: '알 수 없는 처리 방식입니다.',
+        details: `processingMethod: ${processingMethod}`
+      }, 400)
+    }
+    
+    if (!transcript) {
+      return c.json({
+        error: '대본 추출 실패',
+        details: '모든 방식 실패'
+      }, 500)
     }
     
     // 채널 정보 추출
