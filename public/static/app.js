@@ -283,6 +283,9 @@ async function analyzeChannel() {
     const channelUrl = document.getElementById('channelUrl').value.trim();
     const maxVideos = parseInt(document.getElementById('maxVideos').value) || 10;
     
+    // 채널용 처리 방식 선택 값 가져오기
+    const processingMethod = document.querySelector('input[name="channelProcessingMethod"]:checked')?.value || 'cloudflare';
+    
     if (!channelUrl) {
         showChannelError('YouTube 채널 URL을 입력해주세요.');
         return;
@@ -297,11 +300,12 @@ async function analyzeChannel() {
     channelBtn.classList.add('opacity-50', 'cursor-not-allowed');
     
     try {
-        showLoading('채널 분석을 시작하는 중...');
+        showLoading(`채널 분석을 시작하는 중... (처리 방식: ${processingMethod})`);
         
         const response = await axios.post('/api/channel/analyze', {
             videoUrl: channelUrl,
-            maxVideos
+            maxVideos,
+            processingMethod
         }, {
             timeout: 300000  // 5분
         });

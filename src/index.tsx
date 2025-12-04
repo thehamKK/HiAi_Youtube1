@@ -1313,7 +1313,9 @@ app.post('/api/analyze/report', async (c) => {
 // 채널 분석 시작
 app.post('/api/channel/analyze', async (c) => {
   const { env } = c
-  const { videoUrl, maxVideos = 10 } = await c.req.json()
+  const { videoUrl, maxVideos = 10, processingMethod = 'cloudflare' } = await c.req.json()
+  
+  console.log(`🎯 채널 처리 방식: ${processingMethod}`)
   
   if (!env.DB) {
     return c.json({ error: '데이터베이스가 설정되지 않았습니다.' }, 500)
@@ -1375,7 +1377,8 @@ app.post('/api/channel/analyze', async (c) => {
         total_videos: newVideos.length,
         completed_videos: 0,
         failed_videos: 0,
-        status: 'processing'
+        status: 'processing',
+        processing_method: processingMethod
       })
       .select()
       .single()
@@ -1484,12 +1487,15 @@ app.post('/api/channel/process/:batchId', async (c) => {
       })
       .eq('id', nextVideo.id)
     
-    // 배치에서 채널 정보 가져오기
+    // 배치에서 채널 정보 및 처리 방식 가져오기
     const { data: batch } = await supabase
       .from('batch_jobs')
-      .select('channel_id, channel_name')
+      .select('channel_id, channel_name, processing_method')
       .eq('id', batchId)
       .single()
+    
+    const processingMethod = batch?.processing_method || 'cloudflare'
+    console.log(`🎯 배치 처리 방식: ${processingMethod} (Batch ID: ${batchId})`)
     
     // 영상 자동 분석 실행 (1단계 + 2단계)
     const result = await processVideoAnalysisSupabase(
@@ -2030,6 +2036,78 @@ app.get('/', (c) => {
                     <i class="fas fa-list mr-3 text-orange-600"></i>
                     채널 일괄 분석
                 </h2>
+                
+                <!-- 처리 방식 선택 (채널용) -->
+                <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-3 flex items-center">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        처리 방식 선택
+                    </h3>
+                    <div class="space-y-3">
+                        <!-- 방식 1: Cloudflare Workers (샌드박스 성공 방식) -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors">
+                            <input 
+                                type="radio" 
+                                name="channelProcessingMethod" 
+                                value="cloudflare" 
+                                checked
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">Cloudflare Workers</span>
+                                    <span class="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-semibold rounded-full">추천</span>
+                                    <span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">무료</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    타임아웃 없음 • 10회 재시도 • 70-80% 성공률 • 60-600초 소요
+                                </p>
+                            </div>
+                        </label>
+                        
+                        <!-- 방식 2: Supabase Edge Function -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors">
+                            <input 
+                                type="radio" 
+                                name="channelProcessingMethod" 
+                                value="supabase"
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">Supabase Edge Function</span>
+                                    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs font-semibold rounded-full">제한적</span>
+                                    <span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">무료</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    150초 타임아웃 • 자막 필수 • 10-20% 성공률
+                                </p>
+                            </div>
+                        </label>
+                        
+                        <!-- 방식 3: AssemblyAI STT -->
+                        <label class="flex items-start space-x-3 cursor-pointer p-3 rounded-lg hover:bg-gray-100 transition-colors opacity-50 cursor-not-allowed">
+                            <input 
+                                type="radio" 
+                                name="channelProcessingMethod" 
+                                value="assemblyai"
+                                disabled
+                                class="mt-1 w-5 h-5 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div class="flex-1">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-semibold text-gray-800">AssemblyAI STT</span>
+                                    <span class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-semibold rounded-full">고품질</span>
+                                    <span class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-semibold rounded-full">유료</span>
+                                    <span class="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs font-semibold rounded-full">준비 중</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">
+                                    100% 성공률 • 자막 불필요 • $0.15/시간 • 150초 이내 처리
+                                </p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
                 
                 <div class="space-y-4">
                     <input 
